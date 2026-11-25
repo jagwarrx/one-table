@@ -200,10 +200,10 @@ function Cal({c, days, from = 6, to = 23}) {
   days.forEach((dd, di) => {
     c.s.blocks.filter(b => b.day === dd).forEach(b => base.push({id: b.id, bid: b.id, item: b.item, di, start: toMin(b.start), min: b.min, bg: KIND[b.kind],
       tag: (b.kind === 'deep' ? 'Deep' : 'Shallow') + (b.mode === 'timer' ? ' timer' : ' block'), name: (byId(c.all || c.s, b.item) || {}).name || 'Block'}));
-    c.s.items.filter(i => i.type === 'task' && i.when === dd && i.time && i.status !== 'done')
-      .forEach(i => base.push({id: 'p' + i.id, item: i.id, di, start: toMin(i.time), min: +i.dur || 30, plan: true, bg: PLAN, tag: i.repeat ? 'Repeats ' + i.repeat : 'Planned', name: i.name}));
+    c.s.items.filter(i => i.type === 'task' && i.when === dd && i.time)
+      .forEach(i => base.push({id: 'p' + i.id, item: i.id, di, start: toMin(i.time), min: +i.dur || 30, plan: true, bg: PLAN, tag: i.repeat ? 'Repeats ' + i.repeat : 'Planned', name: i.name, done: i.status === 'done'}));
     c.s.items.filter(i => i.type === 'event' && i.when === dd && i.time)
-      .forEach(i => base.push({id: 'e' + i.id, item: i.id, ev: true, di, start: toMin(i.time), min: +i.dur || 60, bg: EVENT, tag: 'Event', name: i.name}));
+      .forEach(i => base.push({id: 'e' + i.id, item: i.id, ev: true, di, start: toMin(i.time), min: +i.dur || 60, bg: EVENT, tag: 'Event', name: i.name, done: i.status === 'done'}));
     c.s.items.filter(h => h.type === 'habit' && h.time && habitOn(h, dd))
       .forEach(h => base.push({id: 'h' + h.id + dd, item: h.id, hid: h.id, di, start: toMin(h.time), min: +h.dur || 15, bg: HABIT, tag: 'Habit', name: h.name, done: (h.log || []).includes(dd)})); });
   /* the timeline scrolls inside its own box; open it at the current time, or at the day's first item */
@@ -222,6 +222,13 @@ function Cal({c, days, from = 6, to = 23}) {
     else if (e.ev) c.upd(e.item, {when: day, time: hm(start), dur: min});
     else c.upd(e.item, {when: day, time: hm(start)}); };
   const [hover, setHover] = useState(null), [ctx, setCtx] = useState(null);
+  /* done box on calendar items: tasks and events toggle done, habits toggle that day */
+  const check = (id, hid, dd) => { if (hid) c.upd(hid, x => ({log: (x.log || []).includes(dd) ? x.log.filter(y => y !== dd) : [...(x.log || []), dd]}));
+    else { const it = byId(c.s, id); if (it) c.toggle(it); } };
+  const tick = (done, name, run, size) => html`<${Box} component="button" aria-label=${(done ? 'Not done: ' : 'Done: ') + name} aria-pressed=${!!done}
+    onPointerDown=${ev => ev.stopPropagation()} onClick=${ev => { ev.stopPropagation(); run(); }}
+    sx=${{p: 0, m: 0, ml: '-2px', border: 0, bgcolor: 'transparent', color: ON, cursor: 'pointer', display: 'flex', flex: 'none', borderRadius: '3px', '&:hover': {bgcolor: 'rgba(0,0,0,.1)'}}}>
+    <${Icon} baseClassName="material-symbols-rounded" sx=${{fontSize: size || 17, fontVariationSettings: done ? "'FILL' 1" : "'FILL' 0"}}>${done ? 'check_box' : 'check_box_outline_blank'}<//><//>`;
   const menu = (ev, id) => { const it = byId(c.s, id); if (!it || !(it.type === 'task' || it.type === 'event')) return; ev.preventDefault(); setCtx({x: ev.clientX, y: ev.clientY, it}); };
   const asType = (it, t) => { c.upd(it.id, t === 'event' ? {type: 'event', status: 'todo', dur: it.dur || 60} : {type: 'task'}); setCtx(null); };
   const minAt = ev => { const r = ev.currentTarget.getBoundingClientRect(); return Math.max(0, Math.min(1425, from * 60 + Math.floor((ev.clientY - r.top) / H * 4) * 15)); };
@@ -258,8 +265,12 @@ function Cal({c, days, from = 6, to = 23}) {
           sx=${{borderLeft: 1, borderColor: 'divider', p: .5, display: 'flex', flexDirection: 'column', gap: .5, bgcolor: hover && hover.di === di && hover.m == null ? 'action.hover' : 'transparent'}}>
         ${startingOn(c.s, dd).map(p => html`<${Box} key=${p.id} onClick=${() => c.open(p.id)} title=${p.name}
           sx=${{bgcolor: '#4fc3f7', color: ON, borderRadius: '4px', px: .75, fontSize: 12.5, lineHeight: '20px', cursor: 'pointer', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'}}>${p.name}<//>`)}
-        ${c.s.items.filter(i => (i.type === 'task' && i.status !== 'done' || i.type === 'event') && i.when === dd && !i.time).map(i => html`<${Box} key=${i.id} onClick=${() => c.open(i.id)} onContextMenu=${ev => menu(ev, i.id)} title=${i.name}
-          sx=${{bgcolor: i.type === 'event' ? EVENT : PLAN, color: ON, borderRadius: '4px', px: .75, fontSize: 12.5, lineHeight: '20px', cursor: 'pointer', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'}}>${i.name}<//>`)}
+        ${c.s.items.filter(i => (i.type === 'task' || i.type === 'event') && i.when === dd && !i.time).map(i => { const dn = i.status === 'done';
+          return html`<${Box} key=${i.id} onClick=${() => c.open(i.id)} onContextMenu=${ev => menu(ev, i.id)} title=${i.name}
+          sx=${{bgcolor: i.type === 'event' ? EVENT : PLAN, color: ON, borderRadius: '4px', pl: .5, pr: .75, fontSize: 12.5, lineHeight: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: .5,
+            opacity: dn ? .5 : 1}}>
+          ${tick(dn, i.name, () => check(i.id), 15)}
+          <${Box} component="span" sx=${{flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textDecoration: dn ? 'line-through' : 'none'}}>${i.name}<//><//>`; })}
       <//>`)}
     <//>
     <${Box} ref=${sc} sx=${{maxHeight: n > 1 ? 'max(320px, calc(100vh - 290px))' : 'max(320px, calc(100vh - 190px))', overflowY: 'auto', scrollbarGutter: 'stable', overscrollBehavior: 'contain'}}>
@@ -274,10 +285,12 @@ function Cal({c, days, from = 6, to = 23}) {
         ${lay(evs.filter(e => e.di === di)).map(e => { const h = Math.max(24, e.min / 60 * H - 3);
           return html`<${Box} key=${e.id} onPointerDown=${ev => down(ev, e)} onContextMenu=${ev => menu(ev, e.item)} title=${e.name}
             sx=${{position: 'absolute', top: Math.max(0, (e.start - from * 60) / 60 * H) + 1.5, height: h, left: 'calc(' + e.col * 100 / e.cols + '% + 3px)', width: 'calc(' + 100 / e.cols + '% - 6px)',
-              borderRadius: '4px', px: 1, py: h > 40 ? .75 : .25, overflow: 'hidden', bgcolor: e.bg, color: ON, filter: e.done ? 'saturate(.5) brightness(.8)' : 'none', cursor: drag && drag.id === e.id ? 'grabbing' : 'grab', touchAction: 'none',
-              boxShadow: e.drag ? '0 10px 24px rgba(0,0,0,.5)' : 'inset 0 0 0 1px rgba(0,0,0,.18)', zIndex: e.drag ? 5 : 1 + e.col, opacity: e.drag ? .92 : 1,
+              borderRadius: '4px', px: 1, py: h > 40 ? .75 : .25, overflow: 'hidden', bgcolor: e.bg, color: ON, cursor: drag && drag.id === e.id ? 'grabbing' : 'grab', touchAction: 'none',
+              boxShadow: e.drag ? '0 10px 24px rgba(0,0,0,.5)' : 'inset 0 0 0 1px rgba(0,0,0,.18)', zIndex: e.drag ? 5 : 1 + e.col, opacity: e.drag ? .92 : e.done ? .5 : 1,
               transition: e.drag ? 'none' : 'box-shadow .15s', '&:hover': {filter: 'brightness(1.06)'}}}>
-            <${Typography} noWrap sx=${{fontSize: 14, fontWeight: 500, lineHeight: '18px', color: ON, textDecoration: e.done ? 'line-through' : 'none'}}>${e.name}<//>
+            <${Stack} direction="row" alignItems="center" spacing=${.5} sx=${{minWidth: 0}}>
+              ${e.bid ? null : tick(e.done, e.name, () => check(e.item, e.hid, days[e.di]))}
+              <${Typography} noWrap sx=${{flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500, lineHeight: '18px', color: ON, textDecoration: e.done ? 'line-through' : 'none'}}>${e.name}<//><//>
             ${h > 40 ? html`<${Typography} noWrap sx=${{fontSize: 12.5, lineHeight: '17px', color: 'rgba(0,0,0,.72)'}}>${hm(e.start)} to ${hm(e.start + e.min)}<//>` : null}
             ${h > 64 ? html`<${Typography} noWrap sx=${{fontSize: 12, lineHeight: '16px', color: 'rgba(0,0,0,.6)'}}>${e.tag}<//>` : null}
             ${e.plan ? null : html`<${Box} data-h="r" sx=${{position: 'absolute', left: 0, right: 0, bottom: 0, height: 8, cursor: 'ns-resize'}}/>`}
