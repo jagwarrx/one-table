@@ -1,8 +1,8 @@
 /* One Table offline file: the page itself comes from the network when online, everything else from the cache first */
-const CACHE = 'one-table-v1795645144';
+const CACHE = 'one-table-v1795645621';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/apple-touch-icon.png',
   'https://unpkg.com/react@18.3.1/umd/react.production.min.js', 'https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js',
-  'https://unpkg.com/@mui/material@5.16.7/umd/material-ui.production.min.js', 'https://unpkg.com/htm@3.1.1/dist/htm.umd.js'];
+  'https://unpkg.com/@mui/material@5.16.7/umd/material-ui.production.min.js', 'https://unpkg.com/htm@3.1.1/dist/htm.umd.js', 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {

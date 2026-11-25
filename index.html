@@ -33,6 +33,7 @@ body{margin:0;background:#121212}
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@mui/material@5.16.7/umd/material-ui.production.min.js"></script>
 <script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.js"></script>
 <script>
 {
 const {useState, useEffect, useMemo} = React;
@@ -360,6 +361,57 @@ function pipDraw(v) {
 }
 setInterval(() => { if (PIP.last && (PIP.cv2 || PIP.mode === 'video')) pipDraw(PIP.last); }, 500);
 const framed = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
+
+/* sync: Supabase, one row per item and per block plus one state row; local first, a local change waiting to go up wins */
+const SB = (() => { try { return !framed && window.supabase ? supabase.createClient('https://qzxqvymgueqdaaobqrpj.supabase.co', 'sb_publishable_at6vwlXryny7wy3ScZ0HNQ_C29Ymvrj') : null; } catch (e) { return null; } })();
+const SYNC_KEY = 'one-table-sync', TBL = ['items', 'blocks'];
+const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(y => [y, x[y]])) : x);
+const blankSnap = uid => ({user: uid, items: {}, blocks: {}, state: null, since: null});
+const loadSnap = uid => { try { const x = JSON.parse(localStorage.getItem(SYNC_KEY)); if (x && x.user === uid) return x; } catch (e) {} return blankSnap(uid); };
+const saveSnap = x => { try { localStorage.setItem(SYNC_KEY, JSON.stringify(x)); } catch (e) {} };
+const bid = b => b.id || 'b' + b.day + b.start;
+const rowsOf = st => { const {items, blocks, ...rest} = st;
+  return {items: Object.fromEntries(items.map((d, i) => [d.id, canon([i, d])])), blocks: Object.fromEntries((blocks || []).map((d, i) => [bid(d), canon([i, d])])), state: canon(rest)}; };
+const chunks = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
+const syncPush = async (st, snap) => {
+  const cur = rowsOf(st), uid = snap.user, done = [];
+  for (const t of TBL) {
+    const up = [];
+    for (const [id, j] of Object.entries(cur[t])) if (snap[t][id] !== j) { const [pos, data] = JSON.parse(j); up.push({user_id: uid, id, pos, data, deleted: false}); done.push([t, id, j]); }
+    for (const [id, j] of Object.entries(snap[t])) if (!(id in cur[t])) { const [pos, data] = JSON.parse(j); up.push({user_id: uid, id, pos, data, deleted: true}); done.push([t, id, null]); }
+    for (const part of chunks(up, 200)) { const {error} = await SB.from(t).upsert(part); if (error) throw error; }
+  }
+  if (snap.state !== cur.state) { const {error} = await SB.from('app_state').upsert({user_id: uid, data: JSON.parse(cur.state)}); if (error) throw error; }
+  return {cur, done};
+};
+const syncPull = async snap => {
+  const since = snap.since ? new Date(Date.parse(snap.since) - 60000).toISOString() : null, got = {items: [], blocks: [], state: null}; let max = snap.since;
+  for (const t of TBL) for (let from = 0; ; from += 1000) {
+    let q = SB.from(t).select('id,pos,data,deleted,updated_at').order('updated_at').range(from, from + 999); if (since) q = q.gt('updated_at', since);
+    const {data, error} = await q; if (error) throw error;
+    data.forEach(r => { got[t].push(r); if (!max || r.updated_at > max) max = r.updated_at; });
+    if (data.length < 1000) break;
+  }
+  const {data, error} = await SB.from('app_state').select('data').maybeSingle(); if (error) throw error;
+  got.state = data ? canon(data.data) : null;
+  return {got, max};
+};
+/* fold pulled rows into the local state; rows changed here and not yet pushed are kept */
+const syncMerge = (st, got, snap) => {
+  const cur = rowsOf(st), out = {...st}; let changed = false;
+  for (const t of TBL) {
+    const m = new Map((st[t] || []).map((d, i) => [t === 'blocks' ? bid(d) : d.id, [i, d]]));
+    for (const r of got[t]) {
+      if (cur[t][r.id] !== snap[t][r.id]) continue;
+      const j = canon([r.pos, r.data]);
+      if (r.deleted) { if (m.delete(r.id)) changed = true; delete snap[t][r.id]; }
+      else { if (cur[t][r.id] !== j) { m.set(r.id, [r.pos, r.data]); changed = true; } snap[t][r.id] = j; }
+    }
+    out[t] = [...m.values()].sort((a, b) => a[0] - b[0]).map(x => x[1]);
+  }
+  if (got.state && (cur.state === snap.state || snap.state === null)) { if (got.state !== cur.state) { Object.assign(out, JSON.parse(got.state)); changed = true; } snap.state = got.state; }
+  return changed ? out : null;
+};
 async function pipVideo(v) {
   if (!document.pictureInPictureEnabled) throw new Error('no pip');
   if (!PIP.vid) { const cv = document.createElement('canvas'); cv.width = 640; cv.height = 300; const vid = document.createElement('video');
@@ -1337,6 +1389,35 @@ function Panel({c}) {
   <//>`;
 }
 
+function Account({open, onClose, user, sync, run}) {
+  const [email, setEmail] = useState(''), [pw, setPw] = useState(''), [err, setErr] = useState(''), [wait, setWait] = useState(false);
+  const signIn = async e => { e.preventDefault(); setWait(true); setErr('');
+    const {error} = await SB.auth.signInWithPassword({email: email.trim(), password: pw}); setWait(false);
+    if (error) setErr(error.message); else { setPw(''); onClose(); } };
+  const ago = sync.at ? Math.max(0, Math.round((Date.now() - sync.at) / 60000)) : null;
+  return html`<${Dialog} open=${open} onClose=${onClose} maxWidth="xs" fullWidth>
+    <${Box} sx=${{p: 3}}>
+      ${user ? html`
+        <${Typography} sx=${{fontSize: 20, fontWeight: 500, mb: .5}}>Sync<//>
+        <${Typography} color="text.secondary" sx=${{mb: 2.5}}>${user.email}<//>
+        <${Stack} direction="row" alignItems="center" spacing=${1} sx=${{mb: 3}}>
+          ${I(sync.st === 'err' || sync.st === 'offline' ? 'cloud_alert' : sync.st === 'busy' ? 'cloud_sync' : 'cloud_done', {color: sync.st === 'err' ? 'error.main' : sync.st === 'offline' ? 'warning.main' : 'success.main'})}
+          <${Typography}>${sync.st === 'busy' ? 'Syncing' : sync.st === 'err' ? 'Sync failed' : sync.st === 'offline' ? 'Offline, changes go up when you are back online' : ago === null ? 'Synced' : ago < 1 ? 'Synced just now' : 'Synced ' + ago + ' min ago'}<//><//>
+        ${sync.st === 'err' && sync.msg ? html`<${Alert} severity="error" sx=${{mb: 2}}>${sync.msg}<//>` : null}
+        <${Stack} direction="row" spacing=${1} justifyContent="flex-end">
+          <${Button} color="inherit" onClick=${() => { SB.auth.signOut(); onClose(); }}>Sign out<//>
+          <${Button} variant="contained" onClick=${run}>Sync now<//><//>`
+      : html`<form onSubmit=${signIn}>
+        <${Typography} sx=${{fontSize: 20, fontWeight: 500, mb: 2.5}}>Sign in<//>
+        <${TextField} fullWidth label="Email" type="email" autoComplete="email" value=${email} onChange=${e => setEmail(e.target.value)} sx=${{mb: 2}} autoFocus/>
+        <${TextField} fullWidth label="Password" type="password" autoComplete="current-password" value=${pw} onChange=${e => setPw(e.target.value)} sx=${{mb: 2}}/>
+        ${err ? html`<${Alert} severity="error" sx=${{mb: 2}}>${err}<//>` : null}
+        <${Stack} direction="row" spacing=${1} justifyContent="flex-end">
+          <${Button} color="inherit" onClick=${onClose}>Cancel<//>
+          <${Button} type="submit" variant="contained" disabled=${wait || !email || !pw}>Sign in<//><//><//>`}
+    <//><//>`;
+}
+
 function App() {
   /* theme: Light, Dark, or Auto (follows claude.ai when inside it, else the device) */
   const sysMode = () => document.documentElement.dataset.theme ? themeMode() : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
@@ -1348,6 +1429,31 @@ function App() {
   const theme = useMemo(() => makeTheme(mode), [mode]);
   const [s, setS] = useState(load), [full, setFull] = useState(false);
   useEffect(() => { setFull(!save(s)); }, [s]);
+
+  /* sync with Supabase when signed in */
+  const [user, setUser] = useState(null), [sync, setSync] = useState({st: 'off', at: null}), [acct, setAcct] = useState(false);
+  const sref = React.useRef(s), snapRef = React.useRef(null), busy = React.useRef(false), again = React.useRef(false), tmrS = React.useRef(null);
+  sref.current = s;
+  useEffect(() => { if (!SB) return; SB.auth.getSession().then(({data}) => setUser(data.session ? data.session.user : null));
+    const {data} = SB.auth.onAuthStateChange((e, ses) => setUser(ses ? ses.user : null)); return () => data.subscription.unsubscribe(); }, []);
+  const runSync = async () => {
+    if (!SB || !snapRef.current) return; if (busy.current) { again.current = true; return; }
+    busy.current = true; setSync(x => ({...x, st: 'busy'}));
+    try {
+      const snap = snapRef.current, {got, max} = await syncPull(snap);
+      const merged = syncMerge(sref.current, got, snap); if (merged) { sref.current = merged; setS(merged); }
+      const {cur, done} = await syncPush(sref.current, snap);
+      done.forEach(([t, id, j]) => { if (j === null) delete snap[t][id]; else snap[t][id] = j; }); snap.state = cur.state;
+      if (max) snap.since = max; saveSnap(snap); setSync({st: 'ok', at: Date.now()});
+    } catch (e) { setSync(x => ({...x, st: navigator.onLine ? 'err' : 'offline', msg: String(e && e.message || e)})); }
+    busy.current = false; if (again.current) { again.current = false; runSync(); }
+  };
+  useEffect(() => { if (!user) { snapRef.current = null; setSync({st: 'off', at: null}); return; }
+    snapRef.current = loadSnap(user.id); runSync();
+    const f = () => { if (document.visibilityState === 'visible') runSync(); }, iv = setInterval(f, 20000);
+    document.addEventListener('visibilitychange', f); addEventListener('online', f); addEventListener('focus', f);
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', f); removeEventListener('online', f); removeEventListener('focus', f); }; }, [user && user.id]);
+  useEffect(() => { if (!user) return; clearTimeout(tmrS.current); tmrS.current = setTimeout(runSync, 1200); }, [s]);
   const [view, setView] = useState(hashView());
   useEffect(() => { const f = () => setView(hashView()); addEventListener('hashchange', f); return () => removeEventListener('hashchange', f); }, []);
   const [openId, setOpenId] = useState(null), [pf, setPf] = useState('all'), [navOpen, setNavOpen] = useState(false), [now, setNow] = useState(Date.now());
@@ -1413,6 +1519,7 @@ function App() {
             <${Box} component="span" sx=${{fontVariantNumeric: 'tabular-nums', fontWeight: 600}}>${count('now')}<//>
             ${runName ? html`<${Box} component="span" sx=${{ml: 1.25, pl: 1.25, borderLeft: '1px solid rgba(0,0,0,.3)', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>${runName}<//>` : null}<//>` : null}
           ${s.running ? html`<${Tooltip} title="Pop out the timer"><${IconButton} color="inherit" aria-label="Pop out the timer" onClick=${popout} sx=${{ml: .5}}>${I('picture_in_picture_alt')}<//><//>` : null}
+          ${SB ? html`<${Tooltip} title=${!user ? 'Sign in to sync' : sync.st === 'err' ? 'Sync failed' : sync.st === 'offline' ? 'Offline' : 'Synced'}><${IconButton} color="inherit" aria-label="Sync" onClick=${() => setAcct(true)}>${I(!user ? 'cloud_off' : sync.st === 'busy' ? 'cloud_sync' : sync.st === 'err' || sync.st === 'offline' ? 'cloud_alert' : 'cloud_done')}<//><//>` : null}
           ${html`<${Tooltip} title="Theme"><${IconButton} color="inherit" aria-label="Theme" onClick=${e => setThemeMenu(e.currentTarget)}>${I(pref === 'auto' ? 'contrast' : pref === 'light' ? 'light_mode' : 'dark_mode')}<//><//>`}<//><//>
         <${Drawer} variant="permanent" sx=${{width: 256, flexShrink: 0}} PaperProps=${{sx: {width: 256, borderColor: 'divider'}}}>${side}<//>`
         : html`<${Drawer} open=${navOpen} onClose=${() => setNavOpen(false)}>${side}<//>`}
@@ -1421,11 +1528,13 @@ function App() {
           <${Toolbar}><${IconButton} edge="start" color="inherit" aria-label="Menu" onClick=${() => setNavOpen(true)}>${I('menu')}<//>
             <${Typography} sx=${{ml: 1, flex: 1, fontSize: 20, fontWeight: 500}}>${NAV.find(n => n && n[0] === view)[1]}<//>
             ${s.running ? html`<${Chip} size="small" color="dojo" label=${count('now') + (runName ? '  ' + runName : '')} onClick=${() => go('now')} sx=${{maxWidth: 200}}/>` : null}
-            ${html`<${Tooltip} title="Theme"><${IconButton} color="inherit" aria-label="Theme" onClick=${e => setThemeMenu(e.currentTarget)}>${I(pref === 'auto' ? 'contrast' : pref === 'light' ? 'light_mode' : 'dark_mode')}<//><//>`}<//><//>`}
+            ${SB ? html`<${Tooltip} title=${!user ? 'Sign in to sync' : sync.st === 'err' ? 'Sync failed' : sync.st === 'offline' ? 'Offline' : 'Synced'}><${IconButton} color="inherit" aria-label="Sync" onClick=${() => setAcct(true)}>${I(!user ? 'cloud_off' : sync.st === 'busy' ? 'cloud_sync' : sync.st === 'err' || sync.st === 'offline' ? 'cloud_alert' : 'cloud_done')}<//><//>` : null}
+          ${html`<${Tooltip} title="Theme"><${IconButton} color="inherit" aria-label="Theme" onClick=${e => setThemeMenu(e.currentTarget)}>${I(pref === 'auto' ? 'contrast' : pref === 'light' ? 'light_mode' : 'dark_mode')}<//><//>`}<//><//>`}
         <${Box} sx=${{maxWidth: ['week', 'today', 'tasks', 'projects', 'now'].includes(view) ? 1280 : 1080, mx: 'auto', px: {xs: 2, md: 5}, py: {xs: 2.5, md: 4}}}><${V} c=${c}/><//>
       <//>
     <//>
     <${Panel} c=${c}/>
+    <${Account} open=${acct} onClose=${() => setAcct(false)} user=${user} sync=${sync} run=${runSync}/>
     <${Menu} anchorEl=${themeMenu} open=${!!themeMenu} onClose=${() => setThemeMenu(null)} disableRestoreFocus>
       ${[['light', 'Light', 'light_mode'], ['dark', 'Dark', 'dark_mode'], ['auto', 'Match system', 'contrast']].map(([v, l, ic]) => html`<${MenuItem} key=${v} selected=${pref === v} onClick=${() => setPref(v)}>
         ${I(ic, {mr: 1.5, fontSize: 20})}<${Box} sx=${{flex: 1, mr: 3}}>${l}<//>${pref === v ? I('check', {fontSize: 18, color: 'primary.main'}) : null}<//>`)}<//>
