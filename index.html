@@ -195,7 +195,7 @@ function lay(evs) {
   if (g.length) flush(); return out;
 }
 function Cal({c, days, from = 6, to = 23}) {
-  const H = 56, nowD = new Date(c.now), nowMin = nowD.getHours() * 60 + nowD.getMinutes(), n = days.length, [drag, setDrag] = useState(null);
+  const H = 52, nowD = new Date(c.now), nowMin = nowD.getHours() * 60 + nowD.getMinutes(), n = days.length, [drag, setDrag] = useState(null), sc = React.useRef(null);
   const base = [];
   days.forEach((dd, di) => {
     c.s.blocks.filter(b => b.day === dd).forEach(b => base.push({id: b.id, bid: b.id, item: b.item, di, start: toMin(b.start), min: b.min, bg: KIND[b.kind],
@@ -206,6 +206,14 @@ function Cal({c, days, from = 6, to = 23}) {
       .forEach(i => base.push({id: 'e' + i.id, item: i.id, ev: true, di, start: toMin(i.time), min: +i.dur || 60, bg: EVENT, tag: 'Event', name: i.name}));
     c.s.items.filter(h => h.type === 'habit' && h.time && habitOn(h, dd))
       .forEach(h => base.push({id: 'h' + h.id + dd, item: h.id, hid: h.id, di, start: toMin(h.time), min: +h.dur || 15, bg: HABIT, tag: 'Habit', name: h.name, done: (h.log || []).includes(dd)})); });
+  /* the timeline scrolls inside its own box; open it at the current time, or at the day's first item */
+  useEffect(() => { const el = sc.current; if (!el) return;
+    const at = days.includes(TODAY) && nowMin > from * 60 && nowMin < to * 60 ? nowMin : Math.min(8 * 60, ...base.map(e => e.start));
+    el.scrollTop = Math.max(0, (at - from * 60) / 60 * H - H); }, [days[0], n]);
+  /* near the box's top or bottom edge while dragging: scroll it */
+  const edge = y => { const el = sc.current; if (!el) return 0; const r = el.getBoundingClientRect(), z = 56;
+    const v = y < r.top + z ? y - r.top - z : y > r.bottom - z ? y - r.bottom + z : 0; if (!v) return 0;
+    const t = el.scrollTop; el.scrollTop += Math.max(-18, Math.min(18, Math.round(v / 3))); return el.scrollTop !== t; };
   const evs = base.map(e => { if (!drag || drag.id !== e.id) return e;
     return drag.resize ? {...e, min: Math.max(15, e.min + drag.d), drag: true} : {...e, start: Math.max(0, Math.min(1425, e.start + drag.d)), di: e.di + drag.dd, drag: true}; });
   const commit = (e, d) => { const day = days[e.di + (d.resize ? 0 : d.dd)], start = d.resize ? e.start : Math.max(0, Math.min(1425, e.start + d.d)), min = d.resize ? Math.max(15, e.min + d.d) : e.min;
@@ -217,15 +225,18 @@ function Cal({c, days, from = 6, to = 23}) {
   const menu = (ev, id) => { const it = byId(c.s, id); if (!it || !(it.type === 'task' || it.type === 'event')) return; ev.preventDefault(); setCtx({x: ev.clientX, y: ev.clientY, it}); };
   const asType = (it, t) => { c.upd(it.id, t === 'event' ? {type: 'event', status: 'todo', dur: it.dur || 60} : {type: 'task'}); setCtx(null); };
   const minAt = ev => { const r = ev.currentTarget.getBoundingClientRect(); return Math.max(0, Math.min(1425, from * 60 + Math.floor((ev.clientY - r.top) / H * 4) * 15)); };
-  const over = (ev, di, allDay) => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; const m = allDay ? null : minAt(ev);
+  const over = (ev, di, allDay) => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; if (!allDay) edge(ev.clientY); const m = allDay ? null : minAt(ev);
     if (!hover || hover.di !== di || hover.m !== m) setHover({di, m}); };
   const drop = (ev, dd, allDay) => { ev.preventDefault(); setHover(null); const id = ev.dataTransfer.getData('text/plain'), it = id && byId(c.s, id);
     if (!it || !(it.type === 'task' || it.type === 'habit' || it.type === 'event')) return; if (allDay && it.type === 'habit') return; const m = allDay ? null : minAt(ev); c.upd(id, x => placeAt(x, dd, m)); };
   const down = (ev, e) => { if (ev.button) return; ev.stopPropagation(); ev.preventDefault();
-    const w = ev.currentTarget.parentElement.getBoundingClientRect().width, resize = ev.target.dataset.h === 'r', st = {x: ev.clientX, y: ev.clientY, moved: false, d: null};
-    const move = m => { const dx = m.clientX - st.x, dy = m.clientY - st.y; if (!st.moved && Math.abs(dx) + Math.abs(dy) < 5) return; st.moved = true;
+    const w = ev.currentTarget.parentElement.getBoundingClientRect().width, resize = ev.target.dataset.h === 'r', el = sc.current;
+    const st = {x: ev.clientX, y: ev.clientY, top: el ? el.scrollTop : 0, moved: false, d: null, last: null, raf: 0};
+    const calc = m => { const dx = m.clientX - st.x, dy = m.clientY - st.y + (el ? el.scrollTop - st.top : 0);
       st.d = {resize, d: Math.round(dy / H * 4) * 15, dd: resize ? 0 : Math.max(-e.di, Math.min(n - 1 - e.di, Math.round(dx / w)))}; setDrag({id: e.id, ...st.d}); };
-    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); setDrag(null);
+    const loop = () => { if (st.raf) return; st.raf = requestAnimationFrame(() => { st.raf = 0; if (st.last && edge(st.last.clientY)) { calc(st.last); loop(); } }); };
+    const move = m => { if (!st.moved && Math.abs(m.clientX - st.x) + Math.abs(m.clientY - st.y) < 5) return; st.moved = true; st.last = m; calc(m); loop(); };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); cancelAnimationFrame(st.raf); st.last = null; setDrag(null);
       if (!st.moved) c.open(e.item); else if (st.d && (st.d.d || st.d.dd)) commit(e, st.d); };
     addEventListener('pointermove', move); addEventListener('pointerup', up); };
   const cols = `56px repeat(${n}, minmax(0,1fr))`;
@@ -234,14 +245,14 @@ function Cal({c, days, from = 6, to = 23}) {
       <${Box} sx=${{width: 12, height: 12, borderRadius: '3px', bgcolor: col}}/><${Typography} variant="caption" color="text.secondary">${l}<//><//>`)}
       <//>
     <${Paper} variant="outlined" sx=${{overflowX: 'auto', borderRadius: 2}}><${Box} sx=${{minWidth: n > 1 ? 780 : 0}}>
-    <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, borderBottom: 1, borderColor: 'divider'}}>
+    <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, borderBottom: 1, borderColor: 'divider', overflowY: 'hidden', scrollbarGutter: 'stable'}}>
       <span></span>
       ${days.map(dd => { const d = parse(dd), t = dd === TODAY; return html`<${Box} key=${dd} sx=${{textAlign: 'center', py: 1.5}}>
         <${Typography} sx=${{fontSize: 16}} color=${t ? 'primary' : 'text.primary'}>${DOW[d.getDay()]}<//>
         <${Box} sx=${{mx: 'auto', mt: .5, width: 48, height: 48, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 26,
           bgcolor: t ? 'primary.main' : 'transparent', color: t ? 'primary.contrastText' : 'text.primary'}}>${d.getDate()}<//><//>`; })}
     <//>
-    <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, borderBottom: 1, borderColor: 'divider', minHeight: 36}}>
+    <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, borderBottom: 1, borderColor: 'divider', minHeight: 36, overflowY: 'hidden', scrollbarGutter: 'stable'}}>
       <${Typography} variant="caption" color="text.secondary" sx=${{fontStyle: 'italic', textAlign: 'right', pr: 1.25, pt: 1}}>All day<//>
       ${days.map((dd, di) => html`<${Box} key=${dd} onDragOver=${ev => over(ev, di, true)} onDragLeave=${() => setHover(null)} onDrop=${ev => drop(ev, dd, true)}
           sx=${{borderLeft: 1, borderColor: 'divider', p: .5, display: 'flex', flexDirection: 'column', gap: .5, bgcolor: hover && hover.di === di && hover.m == null ? 'action.hover' : 'transparent'}}>
@@ -251,7 +262,8 @@ function Cal({c, days, from = 6, to = 23}) {
           sx=${{bgcolor: i.type === 'event' ? EVENT : PLAN, color: ON, borderRadius: '4px', px: .75, fontSize: 12.5, lineHeight: '20px', cursor: 'pointer', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'}}>${i.name}<//>`)}
       <//>`)}
     <//>
-    <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, position: 'relative', height: (to - from) * H, userSelect: drag ? 'none' : 'auto'}}>
+    <${Box} ref=${sc} sx=${{maxHeight: 'max(320px, calc(100vh - 290px))', overflowY: 'auto', scrollbarGutter: 'stable', overscrollBehavior: 'contain'}}>
+    <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, position: 'relative', height: (to - from) * H + 12, userSelect: drag ? 'none' : 'auto'}}>
       <${Box} sx=${{position: 'relative'}}>${[...Array(to - from)].map((_, k) => html`<${Typography} key=${k} variant="caption" color="text.secondary"
         sx=${{position: 'absolute', top: k * H - 9, right: 10, display: k ? 'block' : 'none', fontSize: 12.5}}>${pad(from + k)}:00<//>`)}<//>
       ${days.map((dd, di) => html`<${Box} key=${dd} onDragOver=${ev => over(ev, di)} onDragLeave=${ev => !ev.currentTarget.contains(ev.relatedTarget) && setHover(null)} onDrop=${ev => drop(ev, dd)}
@@ -273,6 +285,7 @@ function Cal({c, days, from = 6, to = 23}) {
         ${dd === TODAY && nowMin > from * 60 && nowMin < to * 60 ? html`<${Box} sx=${{position: 'absolute', left: -5, right: 0, top: (nowMin - from * 60) / 60 * H, height: 2, bgcolor: '#e57373', zIndex: 9, pointerEvents: 'none',
           '&::before': {content: '""', position: 'absolute', left: 0, top: -4, width: 10, height: 10, borderRadius: '50%', bgcolor: '#e57373'}}}/>` : null}
       <//>`)}
+    <//>
     <//>
   <//><//>
   <${Menu} open=${!!ctx} onClose=${() => setCtx(null)} anchorReference="anchorPosition" anchorPosition=${ctx ? {top: ctx.y, left: ctx.x} : undefined} disableRestoreFocus>
@@ -499,7 +512,7 @@ function Now({c}) {
     <${Typography} variant="body2" fontWeight="600">${label}<//><//>`;
   return html`<${Box}>
     <${Head} icon="play_circle" color="#F7941F" title="Now"/>
-    <${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: '1fr', lg: 'minmax(0, 760px) minmax(260px, 1fr)'}, gap: 3, alignItems: 'start'}}>
+    <${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: 'minmax(0,1fr)', lg: 'minmax(0, 760px) minmax(260px, 1fr)'}, gap: 3, alignItems: 'start'}}>
     <${Box}>
     <${Card} elevation=${1} sx=${{p: {xs: 2.5, md: 4}}}>
       <${Stack} direction="row" spacing=${1} alignItems="center" sx=${{color: 'dojo.main', mb: 1}}>
@@ -705,27 +718,27 @@ function Today({c}) {
     <${Head} icon="star" color="#f6c343" title="Today" sub=${fmtDay(TODAY) === 'Today' ? DOW[new Date().getDay()] + ' ' + new Date().getDate() + ' ' + MON[new Date().getMonth()] : ''}
       action=${html`<${ToggleButtonGroup} size="small" exclusive value=${mode} onChange=${(e, v) => v && setMode(v)}>
         <${ToggleButton} value="list">${I('view_agenda', {fontSize: 18, mr: .75})}List<//><${ToggleButton} value="map">${I('account_tree', {fontSize: 18, mr: .75})}Mind map<//><//>`}/>
-    <${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: '1fr', sm: 'repeat(3, minmax(0,1fr))'}, gap: 1.5, mb: 3}}>
+    <${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: 'minmax(0,1fr)', sm: 'repeat(3, minmax(0,1fr))'}, gap: 1.5, mb: 3, alignItems: 'start'}}>
       ${ids.map((id, k) => { const it = id && byId(s, id);
         return html`<${Card} key=${k} variant="outlined" onDragOver=${e => { e.preventDefault(); setOver(k); }} onDragLeave=${() => setOver(-1)}
             onDrop=${e => { e.preventDefault(); setOver(-1); const d = e.dataTransfer.getData('text/plain'); if (d && byId(s, d)) put(d, k); }}
             draggable=${!!it} onDragStart=${e => it && e.dataTransfer.setData('text/plain', it.id)}
-            sx=${{p: 2, minHeight: {xs: 0, sm: 112}, borderStyle: it ? 'solid' : 'dashed', borderWidth: over === k ? 2 : 1,
+            sx=${{p: it ? 2 : 1, px: it ? 2 : 1.25, borderStyle: it ? 'solid' : 'dashed', borderWidth: over === k ? 2 : 1,
               borderColor: over === k ? 'dojo.main' : 'divider', display: 'flex', flexDirection: 'column', gap: .75}}>
           <${Stack} direction="row" alignItems="center" spacing=${1}>
             <${Box} sx=${{width: 24, height: 24, borderRadius: '50%', bgcolor: it ? 'dojo.main' : 'action.selected', color: it ? 'dojo.contrastText' : 'text.secondary',
               display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700}}>${k + 1}<//>
-            <${Typography} variant="body2" color="text.secondary" sx=${{flex: 1}}>${it ? ((it.project && (byId(s, it.project) || {}).name) || 'Priority ' + (k + 1)) : 'Priority ' + (k + 1)}<//>
+            <${Typography} variant="body2" color=${it ? 'text.secondary' : 'text.disabled'} sx=${{flex: 1}}>${it ? ((it.project && (byId(s, it.project) || {}).name) || 'Priority ' + (k + 1)) : 'Priority ' + (k + 1)}<//>
             ${it ? html`<${IconButton} size="small" aria-label="Take out of the top 3" onClick=${() => setTop(a => { a[k] = null; return a; })}>${I('close', {fontSize: 18})}<//>` : null}
           <//>
           ${it ? html`<${Typography} fontWeight="600" sx=${{cursor: 'pointer', textDecoration: it.status === 'done' ? 'line-through' : 'none'}} onClick=${() => c.open(it.id)}>${it.name}<//>
             <${Box} sx=${{mt: 'auto'}}><${Button} size="small" variant="contained" startIcon=${I('play_arrow')} disabled=${it.status === 'done'}
               onClick=${() => { c.setFocus(it.id); c.go('now'); }}>Start<//><//>`
-          : html`<${Typography} variant="body2" color="text.disabled" sx=${{m: 'auto'}}>Drag a task here, or tap its pin<//>`}
+          : null}
         <//>`; })}
     <//>
     ${mode === 'map' ? html`<${DayMap} c=${c} list=${list} habs=${habs}/><${Box} sx=${{mt: 3}}><${Cal} c=${c} days=${[TODAY]} from=${6} to=${23}/><//>` : html`
-    <${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: '1fr', md: 'minmax(0,1fr) minmax(0,1fr)'}, gap: 3}}>
+    <${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: 'minmax(0,1fr)', md: 'minmax(0,1fr) minmax(0,1fr)'}, gap: 3}}>
       <${Box}>
         <${Stack} direction="row" spacing=${2} sx=${{mb: 1}}>
           <${Typography} variant="body2" fontWeight="600">${done} of ${list.length} tasks done<//>
@@ -753,7 +766,7 @@ function Today({c}) {
                 <${Typography} variant="body2" fontWeight="500">${st}<//><//>
             <//>`; })}<//>` : null}
       <//>
-      <${Cal} c=${c} days=${[TODAY]} from=${6} to=${23}/>
+      <${Box} sx=${{position: {md: 'sticky'}, top: 88, alignSelf: 'start', minWidth: 0}}><${Cal} c=${c} days=${[TODAY]} from=${6} to=${23}/><//>
     <//>`}
   <//>`;
 }
