@@ -245,13 +245,13 @@ function Cal({c, days, from = 6, to = 23}) {
       <${Box} sx=${{width: 12, height: 12, borderRadius: '3px', bgcolor: col}}/><${Typography} variant="caption" color="text.secondary">${l}<//><//>`)}
       <//>
     <${Paper} variant="outlined" sx=${{overflowX: 'auto', borderRadius: 2}}><${Box} sx=${{minWidth: n > 1 ? 780 : 0}}>
-    <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, borderBottom: 1, borderColor: 'divider', overflowY: 'hidden', scrollbarGutter: 'stable'}}>
+    ${n > 1 ? html`<${Box} sx=${{display: 'grid', gridTemplateColumns: cols, borderBottom: 1, borderColor: 'divider', overflowY: 'hidden', scrollbarGutter: 'stable'}}>
       <span></span>
       ${days.map(dd => { const d = parse(dd), t = dd === TODAY; return html`<${Box} key=${dd} sx=${{textAlign: 'center', py: 1.5}}>
         <${Typography} sx=${{fontSize: 16}} color=${t ? 'primary' : 'text.primary'}>${DOW[d.getDay()]}<//>
         <${Box} sx=${{mx: 'auto', mt: .5, width: 48, height: 48, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 26,
           bgcolor: t ? 'primary.main' : 'transparent', color: t ? 'primary.contrastText' : 'text.primary'}}>${d.getDate()}<//><//>`; })}
-    <//>
+    <//>` : null}
     <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, borderBottom: 1, borderColor: 'divider', minHeight: 36, overflowY: 'hidden', scrollbarGutter: 'stable'}}>
       <${Typography} variant="caption" color="text.secondary" sx=${{fontStyle: 'italic', textAlign: 'right', pr: 1.25, pt: 1}}>All day<//>
       ${days.map((dd, di) => html`<${Box} key=${dd} onDragOver=${ev => over(ev, di, true)} onDragLeave=${() => setHover(null)} onDrop=${ev => drop(ev, dd, true)}
@@ -262,7 +262,7 @@ function Cal({c, days, from = 6, to = 23}) {
           sx=${{bgcolor: i.type === 'event' ? EVENT : PLAN, color: ON, borderRadius: '4px', px: .75, fontSize: 12.5, lineHeight: '20px', cursor: 'pointer', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'}}>${i.name}<//>`)}
       <//>`)}
     <//>
-    <${Box} ref=${sc} sx=${{maxHeight: 'max(320px, calc(100vh - 290px))', overflowY: 'auto', scrollbarGutter: 'stable', overscrollBehavior: 'contain'}}>
+    <${Box} ref=${sc} sx=${{maxHeight: n > 1 ? 'max(320px, calc(100vh - 290px))' : 'max(320px, calc(100vh - 190px))', overflowY: 'auto', scrollbarGutter: 'stable', overscrollBehavior: 'contain'}}>
     <${Box} sx=${{display: 'grid', gridTemplateColumns: cols, position: 'relative', height: (to - from) * H + 12, userSelect: drag ? 'none' : 'auto'}}>
       <${Box} sx=${{position: 'relative'}}>${[...Array(to - from)].map((_, k) => html`<${Typography} key=${k} variant="caption" color="text.secondary"
         sx=${{position: 'absolute', top: k * H - 9, right: 10, display: k ? 'block' : 'none', fontSize: 12.5}}>${pad(from + k)}:00<//>`)}<//>
