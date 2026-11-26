@@ -90,6 +90,15 @@ const elapsed = (r, now) => (r.pausedAt || now) - r.start - (r.paused || 0);
 const projOf = it => !it ? null : it.type === 'project' ? it.id : it.project;
 const pct = (s, p) => { const t = tasksOf(s, p.id); return t.length ? Math.round(100 * t.filter(x => x.status === 'done').length / t.length) : 0; };
 /* a project's first open task: first milestone's first task, else the first loose task */
+const REP = {daily: 'every day', weekly: 'every week', monthly: 'every month', yearly: 'every year'};
+const occ = (st, rep, k) => { const d = parse(st), y = d.getFullYear(), m = d.getMonth(), dd = d.getDate();
+  if (rep === 'daily' || rep === 'weekly') return iso(addDays(d, k * (rep === 'daily' ? 1 : 7)));
+  const ny = rep === 'yearly' ? y + k : y, nm = rep === 'yearly' ? m : m + k; return iso(new Date(ny, nm, Math.min(dd, new Date(ny, nm + 1, 0).getDate()))); };
+/* a repeating event whose date has passed moves to its next date; the passed dates stay in past[] for the logs */
+const stale = i => i.type === 'event' && REP[i.repeat] && i.when && i.when < TODAY;
+const roll = i => { if (!stale(i)) return i; const st = i.start || i.when, past = [...(i.past || [])]; let k = 0, d;
+  while ((d = occ(st, i.repeat, k)) < TODAY && k < 50000) { if (d >= i.when && !past.includes(d)) past.push(d); k++; }
+  return {...i, when: d, status: 'todo', doneAt: null, start: st, past: past.slice(-400)}; };
 const nextDue = it => { const b = it.when && it.when > TODAY ? parse(it.when) : new Date(); const d = new Date(b);
   if (it.repeat === 'weekly') d.setDate(d.getDate() + 7); else if (it.repeat === 'monthly') d.setMonth(d.getMonth() + 1); else d.setDate(d.getDate() + 1); return iso(d); };
 const firstTask = (s, pid) => { const ok = t => t.status !== 'done' && !t.archived;
@@ -121,9 +130,9 @@ const SLABEL = {inbox: 'Inbox', todo: 'To do', started: 'Started', waiting: 'Wai
 const SCOLOR = {inbox: 'default', todo: 'default', started: 'primary', waiting: 'warning', done: 'success'};
 const KIND = {deep: '#6c9fd8', shallow: '#77b38c'}, PLAN = '#e99d4a', HABIT = '#ce93d8', EVENT = '#4db6ac', ON = 'rgba(0,0,0,.87)';
 const Status = ({v}) => html`<${Chip} size="small" label=${SLABEL[v] || v} color=${SCOLOR[v] || 'default'} variant=${v === 'todo' || v === 'inbox' ? 'outlined' : 'filled'}/>`;
-const VIEWS = ['inbox', 'now', 'today', 'upcoming', 'week', 'habits', 'tasks', 'projects', 'logs', 'archive'];
+const VIEWS = ['inbox', 'now', 'today', 'upcoming', 'week', 'habits', 'reminders', 'tasks', 'projects', 'logs', 'archive'];
 const NAV = [['inbox', 'Inbox', 'inbox', '#90caf9'], 0, ['now', 'Now', 'play_circle', '#F7941F'], ['today', 'Today', 'star', '#f6c343'], ['upcoming', 'Upcoming', 'date_range', '#ef8a80'],
-  ['week', 'Week', 'calendar_view_week', '#ce93d8'], 0, ['habits', 'Habits', 'local_fire_department', '#ef6c4a'], ['tasks', 'Tasks', 'checklist', '#66bb6a'],
+  ['week', 'Week', 'calendar_view_week', '#ce93d8'], 0, ['habits', 'Habits', 'local_fire_department', '#ef6c4a'], ['reminders', 'Reminders', 'notifications', '#ffb74d'], ['tasks', 'Tasks', 'checklist', '#66bb6a'],
   ['projects', 'Projects', 'flag', '#4fc3f7'], ['logs', 'Logs', 'history', '#b0bec5'], 0, ['archive', 'Archive', 'inventory_2', '#90a4ae']];
 const hashView = () => { const h = location.hash.slice(1); return VIEWS.includes(h) ? h : 'today'; };
 const themeMode = () => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
@@ -221,7 +230,7 @@ function Cal({c, days, from = 6, to = 23}) {
     c.s.items.filter(i => i.type === 'task' && i.when === dd && i.time)
       .forEach(i => base.push({id: 'p' + i.id, item: i.id, di, start: toMin(i.time), min: +i.dur || 30, plan: true, bg: PLAN, tag: i.repeat ? 'Repeats ' + i.repeat : 'Planned', name: i.name, done: i.status === 'done'}));
     c.s.items.filter(i => i.type === 'event' && i.when === dd && i.time)
-      .forEach(i => base.push({id: 'e' + i.id, item: i.id, ev: true, di, start: toMin(i.time), min: +i.dur || 60, bg: EVENT, tag: 'Event', name: i.name, done: i.status === 'done'}));
+      .forEach(i => base.push({id: 'e' + i.id, item: i.id, ev: true, di, start: toMin(i.time), min: +i.dur || 60, bg: EVENT, tag: i.reminder ? 'Reminder' : 'Event', name: i.name, done: i.status === 'done'}));
     c.s.items.filter(h => h.type === 'habit' && h.time && habitOn(h, dd))
       .forEach(h => base.push({id: 'h' + h.id + dd, item: h.id, hid: h.id, di, start: toMin(h.time), min: +h.dur || 15, bg: HABIT, tag: 'Habit', name: h.name, done: (h.log || []).includes(dd)})); });
   /* the timeline scrolls inside its own box; open it at the current time, or at the day's first item */
@@ -862,6 +871,43 @@ function WeekHabits({c, days}) {
   <//>`;
 }
 
+function Reminders({c}) {
+  const [n, setN] = useState(''), [d, setD] = useState(TODAY), [t, setT] = useState(''), [r, setR] = useState(''), [showPast, setShowPast] = useState(false);
+  const list = c.s.items.filter(i => i.reminder), key = i => (i.when || '9999') + (i.time || '99');
+  const up = list.filter(i => !i.when || i.when >= TODAY || i.repeat).sort((a, b) => key(a).localeCompare(key(b)));
+  const past = list.filter(i => i.when && i.when < TODAY && !i.repeat).sort((a, b) => key(b).localeCompare(key(a)));
+  const addIt = e => { e.preventDefault(); if (!n.trim()) return; const w = d || TODAY;
+    c.add({type: 'event', reminder: true, name: n.trim(), status: 'todo', when: w, start: w, ...(t ? {time: t, dur: 15} : {}), ...(r ? {repeat: r} : {})}); setN(''); setT(''); setR(''); setD(TODAY); };
+  const away = w => { const k = Math.round((parse(w) - parse(TODAY)) / 864e5); return k === 0 ? 'today' : k === 1 ? 'tomorrow' : k === -1 ? 'yesterday' : k > 0 ? 'in ' + k + ' days' : -k + ' days ago'; };
+  const yr = w => w && parse(w).getFullYear() !== new Date().getFullYear() ? ' ' + parse(w).getFullYear() : '';
+  const line = i => { const dn = i.status === 'done';
+    return html`<${Box} key=${i.id} onClick=${() => c.open(i.id)} sx=${{display: 'flex', alignItems: 'center', gap: 1, pr: 1.5, borderRadius: 1, cursor: 'pointer', '&:hover': {bgcolor: 'action.hover'}}}>
+      <${Checkbox} checked=${dn} onClick=${e => e.stopPropagation()} onChange=${() => c.toggle(i)} icon=${I('radio_button_unchecked')} checkedIcon=${I('check_circle')} color="success" inputProps=${{'aria-label': 'Done'}}/>
+      <${Box} sx=${{flex: 1, minWidth: 0, py: .75}}>
+        <${Typography} noWrap sx=${{textDecoration: dn ? 'line-through' : 'none', color: dn ? 'text.disabled' : 'text.primary'}}>${i.name}<//>
+        <${Typography} variant="caption" color="text.secondary" noWrap component="div">${fmtDay(i.when)}${yr(i.when)}${i.time ? ', ' + i.time : ''}${i.repeat ? ', ' + (REP[i.repeat] || i.repeat) : ''}<//>
+      <//>
+      ${i.repeat ? I('repeat', {fontSize: 18, color: 'text.secondary'}) : null}
+      <${Typography} variant="body2" color=${i.when === TODAY ? 'warning.main' : 'text.secondary'} sx=${{whiteSpace: 'nowrap', minWidth: 76, textAlign: 'right'}}>${i.when ? away(i.when) : ''}<//>
+    <//>`; };
+  return html`<${Box}>
+    <${Head} icon="notifications" color="#ffb74d" title="Reminders"/>
+    <${Paper} component="form" elevation=${1} onSubmit=${addIt} sx=${{p: 2, mb: 3, display: 'grid', gap: 1.5, gridTemplateColumns: {xs: '1fr 1fr', md: 'minmax(0,2fr) 1fr 1fr 1fr auto'}, alignItems: 'center'}}>
+      <${TextField} size="small" label="Remind me of" value=${n} onChange=${e => setN(e.target.value)} sx=${{gridColumn: {xs: '1 / -1', md: 'auto'}}}/>
+      <${DateField} label="Date" value=${d} onChange=${setD}/>
+      <${TimeField} label="Time" value=${t} onChange=${setT}/>
+      <${TextField} select size="small" label="Repeats" value=${r} onChange=${e => setR(e.target.value)} SelectProps=${{displayEmpty: true}} InputLabelProps=${{shrink: true}}>
+        ${[['', 'Never'], ['daily', 'Every day'], ['weekly', 'Every week'], ['monthly', 'Every month'], ['yearly', 'Every year']].map(([v, l]) => html`<${MenuItem} key=${v} value=${v}>${l}<//>`)}<//>
+      <${Button} type="submit" variant="contained" disabled=${!n.trim()} startIcon=${I('add')} sx=${{height: 40}}>Add<//>
+    <//>
+    ${up.length ? html`<${Paper} elevation=${1} sx=${{p: .5}}>${up.map(line)}<//>` : null}
+    ${past.length ? html`<${Box} sx=${{mt: 3}}>
+      <${Stack} direction="row" alignItems="center" spacing=${1} onClick=${() => setShowPast(!showPast)} sx=${{cursor: 'pointer', mb: 1, userSelect: 'none'}}>
+        ${I(showPast ? 'expand_more' : 'chevron_right', {color: 'text.secondary'})}<${Typography} fontWeight="700">Past<//><${Typography} color="text.secondary">${past.length}<//><//>
+      ${showPast ? html`<${Paper} elevation=${1} sx=${{p: .5}}>${past.map(line)}<//>` : null}<//>` : null}
+  <//>`;
+}
+
 function Upcoming({c}) {
   const {s} = c, ws = weekStart(new Date()), tw = [], nw = [];
   for (let k = 1; k <= 13; k++) { const dd = iso(addDays(new Date(), k)); (parse(dd) < addDays(ws, 7) ? tw : nw).push(dd); }
@@ -969,7 +1015,7 @@ function Tasks({c}) {
   const {s} = c, [q, setQ] = useState(''), [type, setType] = useState('task'), [st, setSt] = useState('open');
   const [mode, setModeS] = useState(() => localStorage.getItem('one-table-tmode') || 'table'), setMode = v => { setModeS(v); localStorage.setItem('one-table-tmode', v); };
   const board = mode === 'kanban';
-  const rows = s.items.filter(i => (type === 'all' ? i.type !== 'group' : i.type === type) && (board || st === 'all' || (st === 'open' ? i.status !== 'done' : i.status === st))
+  const rows = s.items.filter(i => (type === 'all' ? i.type !== 'group' : i.type === type || type === 'task' && i.reminder) && (board || st === 'all' || (st === 'open' ? i.status !== 'done' : i.status === st))
     && (c.pf === 'all' || (c.pf === 'none' ? !projOf(i) : projOf(i) === c.pf)) && i.name.toLowerCase().includes(q.toLowerCase()));
   const sel = (label, value, set, opts) => html`<${TextField} select size="small" label=${label} value=${value} onChange=${e => set(e.target.value)} sx=${{minWidth: 140}}>
     ${opts.map(([v, l]) => html`<${MenuItem} key=${v} value=${v}>${l}<//>`)}<//>`;
@@ -1010,12 +1056,12 @@ function Tasks({c}) {
           return html`<${TableRow} key=${i.id} hover onClick=${() => c.open(i.id)} sx=${{cursor: 'pointer'}}>
             <${TableCell} padding="checkbox"><${Checkbox} size="small" checked=${i.status === 'done'} onClick=${e => e.stopPropagation()} onChange=${() => c.toggle(i)}
               icon=${I('radio_button_unchecked', {fontSize: 18})} checkedIcon=${I('check_circle', {fontSize: 18})} color="success" inputProps=${{'aria-label': 'Done'}}/><//>
-            <${TableCell}><${Stack} direction="row" alignItems="center" spacing=${.5}><${Typography} variant="body2" fontWeight="500" sx=${{flex: 1}}>${i.name}<//>${i.type === 'task' ? html`<${Star} c=${c} it=${i} size=${18}/>` : null}<//>${type === 'all' ? html`<${Typography} variant="caption" color="text.secondary">${i.type}<//>` : null}<//>
+            <${TableCell}><${Stack} direction="row" alignItems="center" spacing=${.75}>${i.type === 'event' ? I(i.reminder ? 'notifications' : 'event', {fontSize: 18, color: EVENT}) : null}<${Typography} variant="body2" fontWeight="500" sx=${{flex: 1}}>${i.name}<//>${i.type === 'task' ? html`<${Star} c=${c} it=${i} size=${18}/>` : null}<//>${type === 'all' ? html`<${Typography} variant="caption" color="text.secondary">${i.type}<//>` : null}<//>
             <${TableCell} sx=${{display: {xs: 'none', sm: 'table-cell'}}}><${Typography} variant="body2">${p ? p.name : ''}<//>
               ${m ? html`<${Typography} variant="caption" color="text.secondary">${m.name}<//>` : null}<//>
             <${TableCell}><${Status} v=${i.status}/><//>
-            <${TableCell} sx=${{display: {xs: 'none', md: 'table-cell'}, whiteSpace: 'nowrap'}}>${fmtDay(i.when || i.due)}${i.time ? ', ' + i.time : ''}<//>
-            <${TableCell} sx=${{display: {xs: 'none', md: 'table-cell'}}}>${i.repeat || ''}<//>
+            <${TableCell} sx=${{display: {xs: 'none', md: 'table-cell'}, whiteSpace: 'nowrap'}}>${fmtDay(i.when || i.due)}${(i.when || i.due) && parse(i.when || i.due).getFullYear() !== new Date().getFullYear() ? ' ' + parse(i.when || i.due).getFullYear() : ''}${i.time ? ', ' + i.time : ''}<//>
+            <${TableCell} sx=${{display: {xs: 'none', md: 'table-cell'}}}>${i.repeat ? (i.type === 'event' ? REP[i.repeat] || i.repeat : i.repeat) : ''}<//>
             <${TableCell} padding="checkbox"><${IconButton} size="small" aria-label=${'Delete ' + i.name} onClick=${e => { e.stopPropagation(); c.del(i.id); }}
               sx=${{color: 'text.disabled', '&:hover': {color: 'error.main'}}}>${I('delete', {fontSize: 19})}<//><//>
           <//>`; })}
@@ -1287,6 +1333,7 @@ function Logs({c}) {
   const all = useMemo(() => {
     const e = s.blocks.map(b => { const it = byId(s, b.item); return {k: 'block', day: b.day, t: b.start, id: b.id, item: b.item, name: it ? it.name : 'Block', min: b.min, kind: b.kind, mode: b.mode, p: projOf(it)}; });
     s.items.forEach(i => { if (i.type === 'event' && i.when && (i.when < TODAY || i.when === TODAY && (!i.time || i.time <= hm(new Date().getHours() * 60 + new Date().getMinutes())))) e.push({k: 'event', day: i.when, t: i.time || '', id: 'e' + i.id, item: i.id, name: i.name, min: i.time ? +i.dur || 60 : 0, p: projOf(i)}); });
+    s.items.forEach(i => (i.past || []).forEach(d => e.push({k: 'event', day: d, t: i.time || '', id: 'e' + i.id + d, item: i.id, name: i.name, min: i.time ? +i.dur || 60 : 0, p: projOf(i)})));
     s.items.forEach(i => (i.done || []).forEach(ts => { const d = new Date(ts); e.push({k: 'task', day: iso(d), t: hm(d.getHours() * 60 + d.getMinutes()), id: 'r' + i.id + ts, item: i.id, name: i.name, type: i.type, p: projOf(i)}); }));
     s.items.forEach(i => { if (!i.doneAt || i.status !== 'done') return; const d = new Date(i.doneAt), k = i.type === 'task' ? 'task' : i.type === 'project' || i.type === 'milestone' ? 'project' : null;
       if (k) e.push({k, day: iso(d), t: hm(d.getHours() * 60 + d.getMinutes()), id: 'd' + i.id, item: i.id, name: i.name, type: i.type, p: projOf(i)}); });
@@ -1412,7 +1459,8 @@ function Panel({c}) {
       <${ToggleButtonGroup} exclusive fullWidth size="small" value=${it.type} onChange=${(e, v) => v && set(v === 'habit' ? {type: v, repeat: it.repeat || 'daily', status: 'todo', project: null, milestone: null} : v === 'event' ? {type: v, status: 'todo', dur: it.dur || 60} : {type: v, status: it.status === 'inbox' && v !== 'task' ? 'todo' : it.status})}>
         <${ToggleButton} value="task">Task<//><${ToggleButton} value="project">Project<//><${ToggleButton} value="milestone">Milestone<//><${ToggleButton} value="habit">Habit<//><${ToggleButton} value="event">Event<//><//>
       ${it.type === 'event' ? html`${opts('Project', 'project', pList)}
-        <${Box} sx=${{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5}}>${f('When', 'when', 'date')}${f('Time', 'time', 'time', {disabled: !it.when})}<//>
+        <${Box} sx=${{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5}}><${DateField} label="When" value=${it.when || ''} onChange=${v => set({when: v || null, start: v || null})}/>${f('Time', 'time', 'time', {disabled: !it.when})}<//>
+        ${opts('Repeats', 'repeat', [['', 'Never'], ['daily', 'Every day'], ['weekly', 'Every week'], ['monthly', 'Every month'], ['yearly', 'Every year']], v => ({start: it.when || TODAY, ...(v && !it.when ? {when: TODAY} : {})}))}
         ${opts('Length', 'dur', [[15, '15 minutes'], [30, '30 minutes'], [45, '45 minutes'], [60, '1 hour'], [90, '1.5 hours'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours']])}` : null}
       ${it.type !== 'habit' && it.type !== 'event' ? opts('Status', 'status', STATUS.map(v => [v, SLABEL[v]]), v => ({doneAt: v === 'done' ? Date.now() : null})) : null}
       ${it.type === 'task' ? html`<${Box} sx=${{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5}}>
@@ -1458,11 +1506,11 @@ function Panel({c}) {
     if (fs.length) { e.preventDefault(); fs.forEach(f => shrink(f).then(u => c.upd(it.id, x => ({images: [...(x.images || []), u]})))); } };
   return html`<${Drawer} anchor="right" open=${!!it} onClose=${c.close} sx=${{zIndex: t => t.zIndex.modal}} PaperProps=${{sx: {width: {xs: '100%', sm: 460}}, onPaste}}>
     <${Toolbar} sx=${{borderBottom: 1, borderColor: 'divider', gap: 1}}>
-      <${Typography} fontWeight="700" sx=${{flex: 1}}>${it ? {task: 'Task', project: 'Project', milestone: 'Milestone', habit: 'Habit', event: 'Event'}[it.type] : ''}<//>
+      <${Typography} fontWeight="700" sx=${{flex: 1}}>${it ? it.reminder ? 'Reminder' : {task: 'Task', project: 'Project', milestone: 'Milestone', habit: 'Habit', event: 'Event'}[it.type] : ''}<//>
       ${it && it.type === 'task' ? html`<${Star} c=${c} it=${it}/>` : null}
       ${it && it.type === 'habit' ? (() => { const d = habitDone(it), when = it.repeat === 'monthly' ? 'this month' : 'today';
         return html`<${Button} size="small" variant=${d ? 'outlined' : 'contained'} color="success" startIcon=${I(d ? 'check' : 'add')} onClick=${() => markHabit(c, it)}>${d ? 'Done ' + when : 'Mark ' + when}<//>`; })() : null}
-      ${it && it.type !== 'habit' && it.type !== 'event' ? html`<${Button} size="small" variant=${it.status === 'done' ? 'outlined' : 'contained'} color="success" onClick=${() => c.toggle(it)}>${it.status === 'done' ? 'Reopen' : 'Mark done'}<//>` : null}
+      ${it && it.type !== 'habit' && (it.type !== 'event' || it.reminder) ? html`<${Button} size="small" variant=${it.status === 'done' ? 'outlined' : 'contained'} color="success" onClick=${() => c.toggle(it)}>${it.status === 'done' ? 'Reopen' : 'Mark done'}<//>` : null}
       ${it ? html`<${Tooltip} title=${it.archived ? 'Restore from the archive' : 'Archive'}><${IconButton} aria-label=${it.archived ? 'Restore' : 'Archive'} onClick=${() => c.archive(it.id)}>${I(it.archived ? 'unarchive' : 'archive')}<//><//>` : null}
       ${it ? html`<${Tooltip} title="Delete"><${IconButton} aria-label="Delete" onClick=${() => c.del(it.id)}>${I('delete')}<//><//>` : null}
       <${IconButton} aria-label="Close" onClick=${c.close}>${I('close')}<//>
@@ -1511,6 +1559,7 @@ function App() {
   const theme = useMemo(() => makeTheme(mode), [mode]);
   const [s, setS] = useState(load), [full, setFull] = useState(false);
   useEffect(() => { setFull(!save(s)); }, [s]);
+  useEffect(() => { if (s.items.some(stale)) setS(x => ({...x, items: x.items.map(roll)})); }, [s]);
 
   /* sync with Supabase when signed in */
   const [user, setUser] = useState(null), [sync, setSync] = useState({st: 'off', at: null}), [acct, setAcct] = useState(false);
@@ -1588,6 +1637,7 @@ function App() {
     if (it && it.fresh) setS(x => ({...x, items: it.name.trim() ? x.items.map(i => i.id === it.id ? (({fresh, ...r}) => r)(i) : i) : x.items.filter(i => i.id !== it.id)}));
     setOpenId(null); }, pf, setPf};
   const count = v => v === 'inbox' ? vis.items.filter(i => i.status === 'inbox').length : v === 'archive' ? s.items.filter(i => i.archived).length || '' : v === 'today' ? vis.items.filter(i => isTodayTask(i) && i.status !== 'done').length
+    : v === 'reminders' ? vis.items.filter(i => i.reminder && i.when === TODAY && i.status !== 'done').length || ''
     : v === 'now' && s.running ? clock(s.running.planned ? s.running.planned * 60000 - elapsed(s.running, now) : elapsed(s.running, now)) : '';
   const logo = html`<${Stack} direction="row" alignItems="center" spacing=${1.25}>
       <${Box} sx=${{width: 32, height: 32, borderRadius: '4px', bgcolor: 'dojo.main', color: 'dojo.contrastText', display: 'grid', placeItems: 'center'}}>${I('table_rows', {fontSize: 20})}<//>
@@ -1607,7 +1657,7 @@ function App() {
         <${ListItemIcon} sx=${{minWidth: 36, color: 'text.secondary'}}>${I('more_horiz', {fontSize: 18})}<//>
         <${ListItemText} primary=${'All ' + projects(vis).filter(p => p.status !== 'done').length + ' projects'} primaryTypographyProps=${{fontSize: 14, color: 'text.secondary'}}/><//>` : null}<//>
   <//>`;
-  const V = {inbox: Inbox, now: Now, today: Today, upcoming: Upcoming, week: Week, habits: Habits, tasks: Tasks, projects: Projects, logs: Logs, archive: Archive}[view];
+  const V = {inbox: Inbox, now: Now, today: Today, upcoming: Upcoming, week: Week, habits: Habits, reminders: Reminders, tasks: Tasks, projects: Projects, logs: Logs, archive: Archive}[view];
   return html`<${ThemeProvider} theme=${theme}><${CssBaseline}/>
     <${Box} sx=${{display: 'flex', minHeight: '100vh'}}>
       ${wide ? html`<${AppBar} position="fixed" elevation=${4} sx=${{zIndex: t => t.zIndex.drawer + 1}}><${Toolbar}>${logo}<${Box} sx=${{flex: 1}}/>
