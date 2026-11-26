@@ -1,6 +1,6 @@
 {
-  "name": "One Table",
-  "short_name": "One Table",
+  "name": "tskmngr",
+  "short_name": "tskmngr",
   "start_url": "./#today",
   "scope": "./",
   "display": "standalone",

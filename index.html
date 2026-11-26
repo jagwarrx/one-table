@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>One Table</title>
+<title>tskmngr</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icons/icon-192.png">
@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="apple-mobile-web-app-title" content="One Table">
+<meta name="apple-mobile-web-app-title" content="tskmngr">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0..1,0&display=block">
 <style>
@@ -398,7 +398,7 @@ const PIP_CSS = `*{box-sizing:border-box;margin:0}body{background:#121212;color:
 #k{font-size:12px;font-weight:600;color:#F7941F;letter-spacing:.02em}#t{font-size:46px;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.05}#n{font-size:16px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:rgba(255,255,255,.9)}
 #bar{height:5px;border-radius:3px;background:rgba(247,148,31,.25);overflow:hidden}#bar>i{display:block;height:100%;background:#F7941F}body.over #t{color:#f44336}
 #fl{margin-top:8px;align-self:flex-start;font:600 13px Roboto,system-ui,sans-serif;color:rgba(0,0,0,.87);background:#F7941F;border:0;border-radius:4px;padding:7px 12px;cursor:pointer}#fl:disabled{background:#444;color:#aaa;cursor:default}`;
-function pipSetup(w, float) { const d = w.document; d.title = 'One table timer';
+function pipSetup(w, float) { const d = w.document; d.title = 'tskmngr timer';
   const st = d.createElement('style'); st.textContent = PIP_CSS; d.head.appendChild(st);
   d.body.innerHTML = '<div id="k"></div><div id="t"></div><div id="n"></div><div id="bar"><i></i></div>' + (float ? '<button id="fl">Float on top</button>' : '');
   if (float) d.getElementById('fl').addEventListener('click', () => pipFloat(w)); }
@@ -1625,7 +1625,7 @@ function App() {
       <${Box} component="span" sx=${{fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0}}>${next.name}<//>
       ${small ? null : html`<${Box} component="span" sx=${{opacity: .75, whiteSpace: 'nowrap'}}>in ${dur(toMin(next.time) - nowM)}<//>`}
     <//><//>` : null;
-  const pipVals = () => { const r = s.running; if (!r) return {label: 'Nothing running', time: '--:--', name: 'Start a block in One table', pct: null};
+  const pipVals = () => { const r = s.running; if (!r) return {label: 'Nothing running', time: '--:--', name: 'Start a block in tskmngr', pct: null};
     const el = elapsed(r, now), left = r.planned ? r.planned * 60000 - el : null;
     return {label: (r.pausedAt ? 'Paused, ' : '') + (r.mode === 'timer' ? 'Timer' : r.planned + ' minute block') + ', ' + r.kind + (left != null && left < 0 ? ', over' : ''), time: (left != null && left < 0 ? '+' : '') + clock(left != null ? left : el),
       name: runName || 'Block', pct: r.planned ? Math.min(100, el / (r.planned * 600)) : null, over: left != null && left < 0}; };
@@ -1644,7 +1644,7 @@ function App() {
     : v === 'now' && s.running ? clock(s.running.planned ? s.running.planned * 60000 - elapsed(s.running, now) : elapsed(s.running, now)) : '';
   const logo = html`<${Stack} direction="row" alignItems="center" spacing=${1.25}>
       <${Box} sx=${{width: 32, height: 32, borderRadius: '4px', bgcolor: 'dojo.main', color: 'dojo.contrastText', display: 'grid', placeItems: 'center'}}>${I('table_rows', {fontSize: 20})}<//>
-      <${Typography} sx=${{fontWeight: 500, fontSize: 20}}>One table<//><//>`;
+      <${Typography} sx=${{fontWeight: 500, fontSize: 20}}>tskmngr<//><//>`;
   const side = html`<${Box} sx=${{width: 256, p: 1.5, display: 'flex', flexDirection: 'column', minHeight: '100%'}}>
     ${wide ? html`<${Toolbar}/>` : html`<${Box} sx=${{px: 1.5, py: 1.5}}>${logo}<//>`}
     <${List} dense>${NAV.map((n, k) => n ? html`<${ListItemButton} key=${n[0]} selected=${view === n[0] && !(n[0] === 'tasks' && pf !== 'all')} onClick=${() => { if (n[0] === 'tasks') setPf('all'); go(n[0]); }} sx=${{mb: .25}}>
