@@ -194,6 +194,24 @@ function lay(evs) {
   evs.forEach(e => { if (g.length && e.start >= end) { flush(); end = -1; } g.push(e); end = Math.max(end, e.start + e.min); });
   if (g.length) flush(); return out;
 }
+/* a slot drawn on the calendar: name it, pick task or event */
+function NewSlot({c, draft, dd, onClose}) {
+  const [name, setName] = useState(''), [type, setType] = useState(() => localStorage.getItem('one-table-newtype') || 'task');
+  const save = () => { const n = name.trim(); if (n) { c.add({type, name: n, status: 'todo', when: dd, time: hm(draft.a), dur: draft.b - draft.a}); localStorage.setItem('one-table-newtype', type); } onClose(); };
+  return html`<${Popover} open anchorReference="anchorPosition" anchorPosition=${{top: draft.y, left: draft.x}} onClose=${onClose} disableRestoreFocus
+      PaperProps=${{elevation: 8, sx: {p: 1.5, width: 300}}}>
+    <${Box} component="form" onSubmit=${e => { e.preventDefault(); save(); }}>
+      <${Typography} variant="body2" color="text.secondary" sx=${{mb: 1}}>${fmtDay(dd)}, ${hm(draft.a)} to ${hm(draft.b)}<//>
+      <${TextField} autoFocus fullWidth size="small" placeholder="Name" value=${name} onChange=${e => setName(e.target.value)} inputProps=${{'aria-label': 'Name'}}/>
+      <${Stack} direction="row" alignItems="center" spacing=${1} sx=${{mt: 1.25}}>
+        <${ToggleButtonGroup} size="small" exclusive value=${type} onChange=${(e, v) => v && setType(v)} aria-label="Kind">
+          <${ToggleButton} value="task">Task<//><${ToggleButton} value="event">Event<//><//>
+        <${Box} sx=${{flex: 1}}/>
+        <${Button} type="submit" variant="contained" size="small" disabled=${!name.trim()}>Add<//>
+      <//>
+    <//>
+  <//>`;
+}
 function Cal({c, days, from = 6, to = 23}) {
   const H = 52, nowD = new Date(c.now), nowMin = nowD.getHours() * 60 + nowD.getMinutes(), n = days.length, [drag, setDrag] = useState(null), sc = React.useRef(null);
   const base = [];
@@ -220,7 +238,7 @@ function Cal({c, days, from = 6, to = 23}) {
     if (e.bid) c.set(x => ({...x, blocks: x.blocks.map(b => b.id === e.bid ? {...b, day, start: hm(start), min} : b)}));
     else if (e.hid) c.upd(e.item, x => ({...placeAt(x, day, start), dur: min}));
     else if (e.ev) c.upd(e.item, {when: day, time: hm(start), dur: min});
-    else c.upd(e.item, {when: day, time: hm(start)}); };
+    else c.upd(e.item, {when: day, time: hm(start), dur: min}); };
   const [hover, setHover] = useState(null), [ctx, setCtx] = useState(null);
   /* done box on calendar items: tasks and events toggle done, habits toggle that day */
   const check = (id, hid, dd) => { if (hid) c.upd(hid, x => ({log: (x.log || []).includes(dd) ? x.log.filter(y => y !== dd) : [...(x.log || []), dd]}));
@@ -246,6 +264,18 @@ function Cal({c, days, from = 6, to = 23}) {
     const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); cancelAnimationFrame(st.raf); st.last = null; setDrag(null);
       if (!st.moved) c.open(e.item); else if (st.d && (st.d.d || st.d.dd)) commit(e, st.d); };
     addEventListener('pointermove', move); addEventListener('pointerup', up); };
+  const [draft, setDraft] = useState(null);
+  const make = (ev, di) => { if (ev.button || drag) return; const col = ev.currentTarget; if (ev.pointerType === 'mouse') ev.preventDefault();
+    const at = y => { const r = col.getBoundingClientRect(); return Math.max(from * 60, Math.min(to * 60 - 15, from * 60 + Math.floor((y - r.top) / H * 4) * 15)); };
+    const m0 = at(ev.clientY), st = {moved: false, last: null, raf: 0, y: ev.clientY};
+    setDraft({di, a: m0, b: m0 + 30, live: true});
+    const calc = y => { const m = at(y); setDraft({di, a: Math.min(m0, m), b: Math.max(m0, m) + 15, live: true}); };
+    const loop = () => { if (st.raf) return; st.raf = requestAnimationFrame(() => { st.raf = 0; if (st.last != null && edge(st.last)) { calc(st.last); loop(); } }); };
+    const move = m => { if (!st.moved && Math.abs(m.clientY - st.y) < 5) return; st.moved = true; st.last = m.clientY; calc(m.clientY); loop(); };
+    const end = (m, cancel) => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', no); cancelAnimationFrame(st.raf); st.last = null;
+      setDraft(d => cancel || !d ? null : {...d, live: false, x: m.clientX, y: m.clientY}); };
+    const up = m => end(m), no = m => end(m, true);
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', no); };
   const cols = `56px repeat(${n}, minmax(0,1fr))`;
   return html`<${Box}>
     <${Stack} direction="row" sx=${{flexWrap: 'wrap', gap: 2, mb: 1}} useFlexGap>${[[KIND.deep, 'Deep block'], [KIND.shallow, 'Shallow block'], [PLAN, 'Planned task'], [HABIT, 'Habit'], [EVENT, 'Event']].map(([col, l]) => html`<${Stack} key=${l} direction="row" spacing=${.75} alignItems="center">
@@ -267,6 +297,7 @@ function Cal({c, days, from = 6, to = 23}) {
           sx=${{bgcolor: '#4fc3f7', color: ON, borderRadius: '4px', px: .75, fontSize: 12.5, lineHeight: '20px', cursor: 'pointer', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'}}>${p.name}<//>`)}
         ${c.s.items.filter(i => (i.type === 'task' || i.type === 'event') && i.when === dd && !i.time).map(i => { const dn = i.status === 'done';
           return html`<${Box} key=${i.id} onClick=${() => c.open(i.id)} onContextMenu=${ev => menu(ev, i.id)} title=${i.name}
+          draggable="true" onDragStart=${ev => { ev.dataTransfer.setData('text/plain', i.id); ev.dataTransfer.effectAllowed = 'move'; }}
           sx=${{bgcolor: i.type === 'event' ? EVENT : PLAN, color: ON, borderRadius: '4px', pl: .5, pr: .75, fontSize: 12.5, lineHeight: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: .5,
             opacity: dn ? .5 : 1}}>
           ${tick(dn, i.name, () => check(i.id), 15)}
@@ -278,10 +309,13 @@ function Cal({c, days, from = 6, to = 23}) {
       <${Box} sx=${{position: 'relative'}}>${[...Array(to - from)].map((_, k) => html`<${Typography} key=${k} variant="caption" color="text.secondary"
         sx=${{position: 'absolute', top: k * H - 9, right: 10, display: k ? 'block' : 'none', fontSize: 12.5}}>${pad(from + k)}:00<//>`)}<//>
       ${days.map((dd, di) => html`<${Box} key=${dd} onDragOver=${ev => over(ev, di)} onDragLeave=${ev => !ev.currentTarget.contains(ev.relatedTarget) && setHover(null)} onDrop=${ev => drop(ev, dd)}
+          onPointerDown=${ev => make(ev, di)}
           sx=${{position: 'relative', borderLeft: 1, borderColor: 'divider',
           backgroundImage: 'linear-gradient(to bottom, rgba(128,128,128,.2) 1px, transparent 1px)', backgroundSize: '100% ' + H + 'px'}}>
         ${hover && hover.di === di && hover.m != null ? html`<${Box} sx=${{position: 'absolute', left: 3, right: 3, top: (hover.m - from * 60) / 60 * H + 1.5, height: H / 2 - 3, borderRadius: '4px',
           border: '2px dashed', borderColor: 'primary.main', bgcolor: 'rgba(144,202,249,.12)', zIndex: 8, pointerEvents: 'none', px: 1, fontSize: 12.5, color: 'primary.main', lineHeight: '22px'}}>${hm(hover.m)}<//>` : null}
+        ${draft && draft.di === di ? html`<${Box} sx=${{position: 'absolute', left: 3, right: 3, top: (draft.a - from * 60) / 60 * H + 1.5, height: (draft.b - draft.a) / 60 * H - 3, borderRadius: '4px',
+          border: '2px solid', borderColor: 'primary.main', bgcolor: 'rgba(144,202,249,.28)', zIndex: 7, pointerEvents: 'none', px: 1, fontSize: 12.5, fontWeight: 500, color: 'primary.main', lineHeight: '20px'}}>${hm(draft.a)} to ${hm(draft.b)}<//>` : null}
         ${lay(evs.filter(e => e.di === di)).map(e => { const h = Math.max(24, e.min / 60 * H - 3);
           return html`<${Box} key=${e.id} onPointerDown=${ev => down(ev, e)} onContextMenu=${ev => menu(ev, e.item)} title=${e.name}
             sx=${{position: 'absolute', top: Math.max(0, (e.start - from * 60) / 60 * H) + 1.5, height: h, left: 'calc(' + e.col * 100 / e.cols + '% + 3px)', width: 'calc(' + 100 / e.cols + '% - 6px)',
@@ -293,7 +327,7 @@ function Cal({c, days, from = 6, to = 23}) {
               <${Typography} noWrap sx=${{flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500, lineHeight: '18px', color: ON, textDecoration: e.done ? 'line-through' : 'none'}}>${e.name}<//><//>
             ${h > 40 ? html`<${Typography} noWrap sx=${{fontSize: 12.5, lineHeight: '17px', color: 'rgba(0,0,0,.72)'}}>${hm(e.start)} to ${hm(e.start + e.min)}<//>` : null}
             ${h > 64 ? html`<${Typography} noWrap sx=${{fontSize: 12, lineHeight: '16px', color: 'rgba(0,0,0,.6)'}}>${e.tag}<//>` : null}
-            ${e.plan ? null : html`<${Box} data-h="r" sx=${{position: 'absolute', left: 0, right: 0, bottom: 0, height: 8, cursor: 'ns-resize'}}/>`}
+            <${Box} data-h="r" sx=${{position: 'absolute', left: 0, right: 0, bottom: 0, height: 8, cursor: 'ns-resize'}}/>
           <//>`; })}
         ${dd === TODAY && nowMin > from * 60 && nowMin < to * 60 ? html`<${Box} sx=${{position: 'absolute', left: -5, right: 0, top: (nowMin - from * 60) / 60 * H, height: 2, bgcolor: '#e57373', zIndex: 9, pointerEvents: 'none',
           '&::before': {content: '""', position: 'absolute', left: 0, top: -4, width: 10, height: 10, borderRadius: '50%', bgcolor: '#e57373'}}}/>` : null}
@@ -301,6 +335,7 @@ function Cal({c, days, from = 6, to = 23}) {
     <//>
     <//>
   <//><//>
+  ${draft && !draft.live ? html`<${NewSlot} key=${draft.di + '-' + draft.a + '-' + draft.b} c=${c} draft=${draft} dd=${days[draft.di]} onClose=${() => setDraft(null)}/>` : null}
   <${Menu} open=${!!ctx} onClose=${() => setCtx(null)} anchorReference="anchorPosition" anchorPosition=${ctx ? {top: ctx.y, left: ctx.x} : undefined} disableRestoreFocus>
     ${ctx && ctx.it.type === 'event'
       ? html`<${MenuItem} onClick=${() => asType(ctx.it, 'task')}>${I('task_alt', {mr: 1.5, color: PLAN})}Make it a task<//>`
@@ -717,21 +752,38 @@ function DayMap({c, list, habs}) {
 }
 
 function Today({c}) {
-  const {s} = c, list = s.items.filter(isTodayTask).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
+  /* the arrows step to other days: that day's tasks, habits and calendar; the top 3 and the mind map are for today only */
+  const {s} = c, [off, setOff] = useState(0), dd = day(off), cur = off === 0;
+  const doneOn = i => i.status === 'done' && i.doneAt && iso(new Date(i.doneAt)) === dd;
+  const list = s.items.filter(cur ? isTodayTask : i => i.type === 'task' && i.status !== 'inbox' && (i.when === dd || doneOn(i))).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
   const [txt, setTxt] = useState(''), [over, setOver] = useState(-1);
-  const habs = s.items.filter(h => h.type === 'habit' && (!h.from || h.from <= TODAY) && (h.repeat === 'daily' ? true : h.repeat === 'weekly' ? habitOn(h, TODAY) : !habitDone(h) || (h.log || []).includes(TODAY)))
-    .sort((a, b) => habitDone(a) - habitDone(b) || ['daily', 'weekly', 'monthly'].indexOf(a.repeat) - ['daily', 'weekly', 'monthly'].indexOf(b.repeat));
+  const hDone = h => cur ? habitDone(h) : (h.log || []).some(x => periodKey(x, h.repeat) === periodKey(dd, h.repeat));
+  const hTog = h => cur ? markHabit(c, h) : c.upd(h.id, x => ({log: hDone(x) ? (x.log || []).filter(y => periodKey(y, x.repeat) !== periodKey(dd, x.repeat)) : [...(x.log || []), dd]}));
+  const habs = s.items.filter(h => h.type === 'habit' && (!h.from || h.from <= dd) && (h.repeat === 'daily' ? true : h.repeat === 'weekly' ? habitOn(h, dd)
+      : cur ? !habitDone(h) || (h.log || []).includes(TODAY) : habitOn(h, dd) || (h.log || []).includes(dd)))
+    .sort((a, b) => hDone(a) - hDone(b) || ['daily', 'weekly', 'monthly'].indexOf(a.repeat) - ['daily', 'weekly', 'monthly'].indexOf(b.repeat));
   const ids = s.top && s.top.day === TODAY ? s.top.ids : [null, null, null];
   const setTop = f => c.set(x => ({...x, top: {day: TODAY, ids: f(x.top && x.top.day === TODAY ? [...x.top.ids] : [null, null, null])}}));
   const put = (id, k) => setTop(a => { const from = a.indexOf(id); if (from >= 0) a[from] = a[k]; else if (k < 0) { k = a.indexOf(null); if (k < 0) return a; } a[k] = id; return a; });
   const done = list.filter(i => i.status === 'done').length;
-  const blocked = s.blocks.filter(b => b.day === TODAY).reduce((n, b) => n + b.min, 0);
+  const blocked = s.blocks.filter(b => b.day === dd).reduce((n, b) => n + b.min, 0);
   const [mode, setModeS] = useState(() => localStorage.getItem('one-table-dmode') || 'list'), setMode = v => { setModeS(v); localStorage.setItem('one-table-dmode', v); };
   return html`<${Box}>
-    <${Head} icon="star" color="#f6c343" title="Today" sub=${fmtDay(TODAY) === 'Today' ? DOW[new Date().getDay()] + ' ' + new Date().getDate() + ' ' + MON[new Date().getMonth()] : ''}
-      action=${html`<${ToggleButtonGroup} size="small" exclusive value=${mode} onChange=${(e, v) => v && setMode(v)}>
-        <${ToggleButton} value="list">${I('view_agenda', {fontSize: 18, mr: .75})}List<//><${ToggleButton} value="map">${I('account_tree', {fontSize: 18, mr: .75})}Mind map<//><//>`}/>
-    <${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: 'minmax(0,1fr)', sm: 'repeat(3, minmax(0,1fr))'}, gap: 1.5, mb: 3, alignItems: 'start'}}>
+    <${Stack} direction="row" alignItems="center" spacing=${1.5} sx=${{mb: 3}}>
+      <${Box} sx=${{color: cur ? '#f6c343' : 'text.secondary', display: 'flex'}}>${I(cur ? 'star' : 'calendar_today', {fontSize: 30})}<//>
+      <${Box} sx=${{flex: 1, minWidth: 0}}>
+        <${Stack} direction="row" alignItems="center" spacing=${.5}>
+          <${Typography} variant="h4" component="h1" noWrap sx=${{mr: .5}}>${cur ? 'Today' : fmtDay(dd)}<//>
+          <${Tooltip} title="Previous day"><${IconButton} aria-label="Previous day" onClick=${() => setOff(off - 1)}>${I('chevron_left')}<//><//>
+          <${Tooltip} title="Next day"><${IconButton} aria-label="Next day" onClick=${() => setOff(off + 1)}>${I('chevron_right')}<//><//>
+          ${cur ? null : html`<${Button} size="small" onClick=${() => setOff(0)}>Today<//>`}
+        <//>
+        <${Typography} variant="body2" color="text.secondary" sx=${{mt: .25, visibility: Math.abs(off) <= 1 ? 'visible' : 'hidden'}}>${DOW[parse(dd).getDay()] + ' ' + parse(dd).getDate() + ' ' + MON[parse(dd).getMonth()]}<//>
+      <//>
+      ${cur ? html`<${ToggleButtonGroup} size="small" exclusive value=${mode} onChange=${(e, v) => v && setMode(v)}>
+        <${ToggleButton} value="list">${I('view_agenda', {fontSize: 18, mr: .75})}List<//><${ToggleButton} value="map">${I('account_tree', {fontSize: 18, mr: .75})}Mind map<//><//>` : null}
+    <//>
+    ${cur ? html`<${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: 'minmax(0,1fr)', sm: 'repeat(3, minmax(0,1fr))'}, gap: 1.5, mb: 3, alignItems: 'start'}}>
       ${ids.map((id, k) => { const it = id && byId(s, id);
         return html`<${Card} key=${k} variant="outlined" onDragOver=${e => { e.preventDefault(); setOver(k); }} onDragLeave=${() => setOver(-1)}
             onDrop=${e => { e.preventDefault(); setOver(-1); const d = e.dataTransfer.getData('text/plain'); if (d && byId(s, d)) put(d, k); }}
@@ -749,27 +801,27 @@ function Today({c}) {
               onClick=${() => { c.setFocus(it.id); c.go('now'); }}>Start<//><//>`
           : null}
         <//>`; })}
-    <//>
-    ${mode === 'map' ? html`<${DayMap} c=${c} list=${list} habs=${habs}/><${Box} sx=${{mt: 3}}><${Cal} c=${c} days=${[TODAY]} from=${6} to=${23}/><//>` : html`
+    <//>` : null}
+    ${mode === 'map' && cur ? html`<${DayMap} c=${c} list=${list} habs=${habs}/><${Box} sx=${{mt: 3}}><${Cal} c=${c} days=${[TODAY]} from=${6} to=${23}/><//>` : html`
     <${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: 'minmax(0,1fr)', md: 'minmax(0,1fr) minmax(0,1fr)'}, gap: 3}}>
       <${Box}>
         <${Stack} direction="row" spacing=${2} sx=${{mb: 1}}>
           <${Typography} variant="body2" fontWeight="600">${done} of ${list.length} tasks done<//>
-          <${Typography} variant="body2" color="text.secondary">${dur(blocked)} in blocks today<//>
+          <${Typography} variant="body2" color="text.secondary">${dur(blocked)} in blocks${cur ? ' today' : ''}<//>
         <//>
         <${LinearProgress} variant="determinate" value=${list.length ? 100 * done / list.length : 0} sx=${{height: 6, borderRadius: 3, mb: 2}}/>
         <${Paper} elevation=${1} sx=${{p: .5}}>
-          ${list.map(it => html`<${Row} key=${it.id} c=${c} it=${it} pin=${ids.includes(it.id) ? null : id => put(id, -1)}/>`)}
-          <${Box} component="form" sx=${{px: 1, py: .5}} onSubmit=${e => { e.preventDefault(); if (txt.trim()) { c.add({type: 'task', name: txt.trim(), status: 'todo', when: TODAY}); setTxt(''); } }}>
-            <${TextField} fullWidth variant="standard" placeholder="Add to today" value=${txt} onChange=${e => setTxt(e.target.value)} InputProps=${{disableUnderline: true}} inputProps=${{'aria-label': 'Add to today'}}/>
+          ${list.map(it => html`<${Row} key=${it.id} c=${c} it=${it} noDate=${!cur} pin=${!cur || ids.includes(it.id) ? null : id => put(id, -1)}/>`)}
+          <${Box} component="form" sx=${{px: 1, py: .5}} onSubmit=${e => { e.preventDefault(); if (txt.trim()) { c.add({type: 'task', name: txt.trim(), status: 'todo', when: dd}); setTxt(''); } }}>
+            <${TextField} fullWidth variant="standard" placeholder=${'Add to ' + (Math.abs(off) <= 1 ? fmtDay(dd).toLowerCase() : fmtDay(dd))} value=${txt} onChange=${e => setTxt(e.target.value)} InputProps=${{disableUnderline: true}} inputProps=${{'aria-label': 'Add a task'}}/>
           <//>
         <//>
         ${habs.length ? html`<${Stack} direction="row" spacing=${2} sx=${{mt: 3, mb: 1}}>
             <${Typography} variant="body2" fontWeight="600">Habits<//>
-            <${Typography} variant="body2" color="text.secondary">${habs.filter(habitDone).length} of ${habs.length} done<//><//>
-          <${Paper} elevation=${1} sx=${{p: .5}}>${habs.map(h => { const d = habitDone(h), p = h.project && byId(s, h.project), st = streak(h);
+            <${Typography} variant="body2" color="text.secondary">${habs.filter(hDone).length} of ${habs.length} done<//><//>
+          <${Paper} elevation=${1} sx=${{p: .5}}>${habs.map(h => { const d = hDone(h), p = h.project && byId(s, h.project), st = streak(h);
             return html`<${Box} key=${h.id} draggable="true" onDragStart=${e => e.dataTransfer.setData('text/plain', h.id)} onClick=${() => c.open(h.id)} sx=${{display: 'flex', alignItems: 'center', gap: 1, pr: 1.5, borderRadius: 1, cursor: 'pointer', '&:hover': {bgcolor: 'action.hover'}}}>
-              <${Checkbox} checked=${d} onClick=${e => e.stopPropagation()} onChange=${() => markHabit(c, h)} icon=${I('radio_button_unchecked')} checkedIcon=${I('check_circle')}
+              <${Checkbox} checked=${d} disabled=${dd > TODAY} onClick=${e => e.stopPropagation()} onChange=${() => hTog(h)} icon=${I('radio_button_unchecked')} checkedIcon=${I('check_circle')}
                 color="success" inputProps=${{'aria-label': 'Done ' + (h.repeat === 'monthly' ? 'this month' : 'today')}}/>
               <${Box} sx=${{flex: 1, minWidth: 0, py: .75}}>
                 <${Typography} noWrap sx=${{color: d ? 'text.disabled' : 'text.primary', textDecoration: d ? 'line-through' : 'none'}}>${h.name}<//>
@@ -779,7 +831,7 @@ function Today({c}) {
                 <${Typography} variant="body2" fontWeight="500">${st}<//><//>
             <//>`; })}<//>` : null}
       <//>
-      <${Box} sx=${{position: {md: 'sticky'}, top: 88, alignSelf: 'start', minWidth: 0}}><${Cal} c=${c} days=${[TODAY]} from=${6} to=${23}/><//>
+      <${Box} sx=${{position: {md: 'sticky'}, top: 88, alignSelf: 'start', minWidth: 0}}><${Cal} c=${c} days=${[dd]} from=${6} to=${23}/><//>
     <//>`}
   <//>`;
 }
