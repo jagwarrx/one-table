@@ -773,15 +773,16 @@ function Today({c}) {
       <${Box} sx=${{color: cur ? '#f6c343' : 'text.secondary', display: 'flex'}}>${I(cur ? 'star' : 'calendar_today', {fontSize: 30})}<//>
       <${Box} sx=${{flex: 1, minWidth: 0}}>
         <${Stack} direction="row" alignItems="center" spacing=${.5}>
-          <${Typography} variant="h4" component="h1" noWrap sx=${{mr: .5}}>${cur ? 'Today' : fmtDay(dd)}<//>
+          <${Typography} variant="h4" component="h1" noWrap sx=${{mr: .5, fontSize: {xs: 28, sm: 34}}}>${cur ? 'Today' : fmtDay(dd)}<//>
           <${Tooltip} title="Previous day"><${IconButton} aria-label="Previous day" onClick=${() => setOff(off - 1)}>${I('chevron_left')}<//><//>
           <${Tooltip} title="Next day"><${IconButton} aria-label="Next day" onClick=${() => setOff(off + 1)}>${I('chevron_right')}<//><//>
           ${cur ? null : html`<${Button} size="small" onClick=${() => setOff(0)}>Today<//>`}
         <//>
         <${Typography} variant="body2" color="text.secondary" sx=${{mt: .25, visibility: Math.abs(off) <= 1 ? 'visible' : 'hidden'}}>${DOW[parse(dd).getDay()] + ' ' + parse(dd).getDate() + ' ' + MON[parse(dd).getMonth()]}<//>
       <//>
-      ${cur ? html`<${ToggleButtonGroup} size="small" exclusive value=${mode} onChange=${(e, v) => v && setMode(v)}>
-        <${ToggleButton} value="list">${I('view_agenda', {fontSize: 18, mr: .75})}List<//><${ToggleButton} value="map">${I('account_tree', {fontSize: 18, mr: .75})}Mind map<//><//>` : null}
+      ${cur ? html`<${ToggleButtonGroup} size="small" exclusive value=${mode} onChange=${(e, v) => v && setMode(v)} sx=${{flex: 'none'}}>
+        <${ToggleButton} value="list" aria-label="List">${I('view_agenda', {fontSize: 18, mr: {xs: 0, sm: .75}})}<${Box} component="span" sx=${{display: {xs: 'none', sm: 'inline'}}}>List<//><//>
+        <${ToggleButton} value="map" aria-label="Mind map">${I('account_tree', {fontSize: 18, mr: {xs: 0, sm: .75}})}<${Box} component="span" sx=${{display: {xs: 'none', sm: 'inline'}}}>Mind map<//><//><//>` : null}
     <//>
     ${cur ? html`<${Box} sx=${{display: 'grid', gridTemplateColumns: {xs: 'minmax(0,1fr)', sm: 'repeat(3, minmax(0,1fr))'}, gap: 1.5, mb: 3, alignItems: 'start'}}>
       ${ids.map((id, k) => { const it = id && byId(s, id);
@@ -1557,6 +1558,18 @@ function App() {
     if (on) setOpenId(null); setUndo({prev: s, msg: (on ? 'Archived ' : 'Restored ') + it.name}); };
   const vis = useMemo(() => withStarts({...s, items: s.items.filter(i => !archived(s, i))}), [s]);
   const runName = s.running && (byId(s, s.running.item) || {}).name;
+  /* the next timed item today that starts after now: tasks, events and habits not yet done */
+  const nd = new Date(now), nowM = nd.getHours() * 60 + nd.getMinutes();
+  const next = vis.items.filter(i => i.time && toMin(i.time) > nowM && (i.type === 'habit' ? (!i.from || i.from <= TODAY) && habitOn(i, TODAY) && !(i.log || []).includes(TODAY)
+      : (i.type === 'task' || i.type === 'event') && i.when === TODAY && i.status !== 'done' && i.status !== 'inbox'))
+    .sort((a, b) => a.time.localeCompare(b.time))[0];
+  const nextBtn = (small) => next ? html`<${Tooltip} title=${'Next: ' + next.name}><${ButtonBase} onClick=${() => setOpenId(next.id)}
+      sx=${{mr: 1, px: 1.25, height: 32, borderRadius: '16px', bgcolor: 'rgba(255,255,255,.16)', color: 'inherit', gap: 1, maxWidth: small ? 190 : 460, minWidth: 0, font: 'inherit', fontSize: 14, '&:hover': {bgcolor: 'rgba(255,255,255,.26)'}}}>
+      ${I(next.type === 'event' ? 'event' : next.type === 'habit' ? 'local_fire_department' : 'schedule', {fontSize: 18})}
+      <${Box} component="span" sx=${{fontWeight: 600, fontVariantNumeric: 'tabular-nums'}}>${next.time}<//>
+      <${Box} component="span" sx=${{fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0}}>${next.name}<//>
+      ${small ? null : html`<${Box} component="span" sx=${{opacity: .75, whiteSpace: 'nowrap'}}>in ${dur(toMin(next.time) - nowM)}<//>`}
+    <//><//>` : null;
   const pipVals = () => { const r = s.running; if (!r) return {label: 'Nothing running', time: '--:--', name: 'Start a block in One table', pct: null};
     const el = elapsed(r, now), left = r.planned ? r.planned * 60000 - el : null;
     return {label: (r.pausedAt ? 'Paused, ' : '') + (r.mode === 'timer' ? 'Timer' : r.planned + ' minute block') + ', ' + r.kind + (left != null && left < 0 ? ', over' : ''), time: (left != null && left < 0 ? '+' : '') + clock(left != null ? left : el),
@@ -1593,6 +1606,7 @@ function App() {
   return html`<${ThemeProvider} theme=${theme}><${CssBaseline}/>
     <${Box} sx=${{display: 'flex', minHeight: '100vh'}}>
       ${wide ? html`<${AppBar} position="fixed" elevation=${4} sx=${{zIndex: t => t.zIndex.drawer + 1}}><${Toolbar}>${logo}<${Box} sx=${{flex: 1}}/>
+          ${nextBtn(false)}
           ${s.running ? html`<${Button} color="dojo" variant="contained" startIcon=${I(s.running.pausedAt ? 'pause' : 'timer')} onClick=${() => go('now')} sx=${{maxWidth: 520, textTransform: 'none'}}>
             <${Box} component="span" sx=${{fontVariantNumeric: 'tabular-nums', fontWeight: 600}}>${count('now')}<//>
             ${runName ? html`<${Box} component="span" sx=${{ml: 1.25, pl: 1.25, borderLeft: '1px solid rgba(0,0,0,.3)', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>${runName}<//>` : null}<//>` : null}
@@ -1604,7 +1618,8 @@ function App() {
       <${Box} component="main" sx=${{flex: 1, minWidth: 0}}>
         ${wide ? html`<${Toolbar}/>` : html`<${AppBar} position="sticky" elevation=${4}>
           <${Toolbar}><${IconButton} edge="start" color="inherit" aria-label="Menu" onClick=${() => setNavOpen(true)}>${I('menu')}<//>
-            <${Typography} sx=${{ml: 1, flex: 1, fontSize: 20, fontWeight: 500}}>${NAV.find(n => n && n[0] === view)[1]}<//>
+            <${Typography} noWrap sx=${{ml: 1, flex: 1, fontSize: 20, fontWeight: 500}}>${NAV.find(n => n && n[0] === view)[1]}<//>
+            ${s.running ? null : nextBtn(true)}
             ${s.running ? html`<${Chip} size="small" color="dojo" label=${count('now') + (runName ? '  ' + runName : '')} onClick=${() => go('now')} sx=${{maxWidth: 200}}/>` : null}
             ${SB ? html`<${Tooltip} title=${!user ? 'Sign in to sync' : sync.st === 'err' ? 'Sync failed' : sync.st === 'offline' ? 'Offline' : 'Synced'}><${IconButton} color="inherit" aria-label="Sync" onClick=${() => setAcct(true)}>${I(!user ? 'cloud_off' : sync.st === 'busy' ? 'cloud_sync' : sync.st === 'err' || sync.st === 'offline' ? 'cloud_alert' : 'cloud_done')}<//><//>` : null}
           ${html`<${Tooltip} title="Theme"><${IconButton} color="inherit" aria-label="Theme" onClick=${e => setThemeMenu(e.currentTarget)}>${I(pref === 'auto' ? 'contrast' : pref === 'light' ? 'light_mode' : 'dark_mode')}<//><//>`}<//><//>`}
