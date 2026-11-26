@@ -433,7 +433,10 @@ setInterval(() => { if (PIP.last && (PIP.cv2 || PIP.mode === 'video')) pipDraw(P
 const framed = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
 
 /* sync: Supabase, one row per item and per block plus one state row; local first, a local change waiting to go up wins */
-const SB = (() => { try { return !framed && window.supabase ? supabase.createClient('https://qzxqvymgueqdaaobqrpj.supabase.co', 'sb_publishable_at6vwlXryny7wy3ScZ0HNQ_C29Ymvrj') : null; } catch (e) { return null; } })();
+/* sync is off only inside claude.ai; other pages that embed the app (Excalidraw) sync after a sign-in inside the embed */
+const inClaude = framed && (() => { const o = [...(location.ancestorOrigins || [])].join(' ') + ' ' + document.referrer + ' ' + location.hostname;
+  return /claude\.ai|claudeusercontent|anthropic/.test(o) || !(location.ancestorOrigins && location.ancestorOrigins.length) && !document.referrer; })();
+const SB = (() => { try { return !inClaude && window.supabase ? supabase.createClient('https://qzxqvymgueqdaaobqrpj.supabase.co', 'sb_publishable_at6vwlXryny7wy3ScZ0HNQ_C29Ymvrj') : null; } catch (e) { return null; } })();
 const SYNC_KEY = 'one-table-sync', TBL = ['items', 'blocks'];
 const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(y => [y, x[y]])) : x);
 const blankSnap = uid => ({user: uid, items: {}, blocks: {}, state: null, since: null});
