@@ -974,7 +974,10 @@ function Tasks({c}) {
   const sel = (label, value, set, opts) => html`<${TextField} select size="small" label=${label} value=${value} onChange=${e => set(e.target.value)} sx=${{minWidth: 140}}>
     ${opts.map(([v, l]) => html`<${MenuItem} key=${v} value=${v}>${l}<//>`)}<//>`;
   return html`<${Box}>
-    <${Head} icon="checklist" color="#66bb6a" title="Tasks"/>
+    <${Head} icon="checklist" color="#66bb6a" title="Tasks" action=${(() => { const t = type === 'all' ? 'task' : type;
+      return html`<${Button} variant="contained" startIcon=${I('add')} onClick=${() => { const id = c.add({type: t, name: '', status: 'todo', fresh: true,
+          ...(c.pf !== 'all' && c.pf !== 'none' && t !== 'project' && t !== 'habit' ? {project: c.pf} : {}), ...(t === 'habit' ? {repeat: 'daily', log: []} : {}), ...(t === 'event' ? {dur: 60} : {})}); c.open(id); }}>
+        ${'New ' + t}<//>`; })()}/>
     <${Stack} direction="row" sx=${{flexWrap: 'wrap', gap: 1.5, mb: 2}} useFlexGap>
       <${TextField} size="small" placeholder="Search" value=${q} onChange=${e => setQ(e.target.value)} InputProps=${{startAdornment: I('search', {mr: 1, color: 'text.secondary'})}} inputProps=${{'aria-label': 'Search'}}/>
       ${sel('Type', type, setType, [['task', 'Tasks'], ['project', 'Projects'], ['milestone', 'Milestones'], ['habit', 'Habits'], ['event', 'Events'], ['all', 'Everything']])}
@@ -1404,7 +1407,7 @@ function Panel({c}) {
     const pList = [['', 'No project'], ...projects(s).map(p => [p.id, p.name])];
     const mList = it.project ? [['', 'No milestone'], ...milestones(s, it.project).map(m => [m.id, m.name])] : [['', 'No milestone']];
     body = html`<${Stack} spacing=${2.25} sx=${{p: 2.5}}>
-      <${TextField} fullWidth label="Name" value=${it.name} onChange=${e => set({name: e.target.value})} multiline/>
+      <${TextField} fullWidth label="Name" value=${it.name} onChange=${e => set({name: e.target.value})} multiline autoFocus=${!!it.fresh && !it.name}/>
       ${it.type === 'project' ? html`<${TextField} fullWidth multiline label="When is this done?" value=${it.doneWhen || ''} onChange=${e => set({doneWhen: e.target.value})}/>` : null}
       <${ToggleButtonGroup} exclusive fullWidth size="small" value=${it.type} onChange=${(e, v) => v && set(v === 'habit' ? {type: v, repeat: it.repeat || 'daily', status: 'todo', project: null, milestone: null} : v === 'event' ? {type: v, status: 'todo', dur: it.dur || 60} : {type: v, status: it.status === 'inbox' && v !== 'task' ? 'todo' : it.status})}>
         <${ToggleButton} value="task">Task<//><${ToggleButton} value="project">Project<//><${ToggleButton} value="milestone">Milestone<//><${ToggleButton} value="habit">Habit<//><${ToggleButton} value="event">Event<//><//>
@@ -1581,7 +1584,9 @@ function App() {
   const move = (id, beforeId, patch) => setS(x => { const it = x.items.find(i => i.id === id); if (!it) return x; const rest = x.items.filter(i => i.id !== id), moved = {...it, ...(patch || {})};
     const k = beforeId ? rest.findIndex(i => i.id === beforeId) : -1; if (k < 0) rest.push(moved); else rest.splice(k, 0, moved); return {...x, items: rest}; });
   const mindMap = id => { if (id && view !== 'projects') go('projects'); setMapId(id); window.scrollTo(0, 0); };
-  const c = {pause, move, mapId, mindMap, popout, focus, setFocus, s: vis, all: s, archive, set: setS, upd, add, toggle, finish, go, del, now, open: setOpenId, openId, close: () => setOpenId(null), pf, setPf};
+  const c = {pause, move, mapId, mindMap, popout, focus, setFocus, s: vis, all: s, archive, set: setS, upd, add, toggle, finish, go, del, now, open: setOpenId, openId, close: () => { const it = openId && byId(s, openId);
+    if (it && it.fresh) setS(x => ({...x, items: it.name.trim() ? x.items.map(i => i.id === it.id ? (({fresh, ...r}) => r)(i) : i) : x.items.filter(i => i.id !== it.id)}));
+    setOpenId(null); }, pf, setPf};
   const count = v => v === 'inbox' ? vis.items.filter(i => i.status === 'inbox').length : v === 'archive' ? s.items.filter(i => i.archived).length || '' : v === 'today' ? vis.items.filter(i => isTodayTask(i) && i.status !== 'done').length
     : v === 'now' && s.running ? clock(s.running.planned ? s.running.planned * 60000 - elapsed(s.running, now) : elapsed(s.running, now)) : '';
   const logo = html`<${Stack} direction="row" alignItems="center" spacing=${1.25}>
